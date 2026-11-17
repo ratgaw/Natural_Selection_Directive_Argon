@@ -1,18 +1,5 @@
--- LocalScript. Place under StarterPlayerScripts alongside CombatInput.lua/
--- CameraLockState.lua/GeneralPlayerSettings.lua (same "client script that
--- isn't part of the main inventory GUI tree" category as those).
---
--- Shows which stage of the Animal Frenzy parasite infection the local
--- player is on and a countdown to the next (worse) stage — [stated] ask:
--- "which stage of infection... how long until they reach the next stage,
--- with more and more effects the higher the infection stage". Built as its
--- own small ScreenGui entirely from script rather than wired into the
--- existing Inventory/Stats panel, since nothing in that GUI was earmarked
--- for infection and I don't have its Explorer layout in front of me to
--- safely reuse a slot the way the hunger stage was dropped onto the
--- existing STAMINA Stat label. Nothing here needs any manual Studio setup
--- beyond the InfectionUpdated RemoteEvent PlayerInfection.lua already
--- calls for (ReplicatedStorage, same place as EventWarning/HungerUpdated).
+-- Infection HUD: current stage and countdown to the next one. Builds its own
+-- ScreenGui in code.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local infection_updated = ReplicatedStorage:WaitForChild("InfectionUpdated")
@@ -36,9 +23,7 @@ panel.Parent = screen_gui
 local corner = Instance.new("UICorner")
 corner.CornerRadius = UDim.new(0, 8)
 corner.Parent = panel
--- Left accent bar — recolors per stage (yellow/orange/red from
--- PlayerInfection's INFECTION_STAGES) so severity reads at a glance even
--- before you've read the text.
+-- Accent bar colored per stage.
 local accent = Instance.new("Frame")
 accent.Name = "Accent"
 accent.Size = UDim2.new(0, 6, 1, 0)

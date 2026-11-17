@@ -1,12 +1,5 @@
--- Loot pool for the building floor-scatter system (LootFloorArea markers,
--- rolled in StartMatch.lua's Spawn_Building_Loot via CrateLoot.weighted_pick
--- — same weighted-pick shape as CrateData, so it reuses that helper instead
--- of a second copy of the same 10 lines). [stated] design: this is
--- deliberately a much lower-value/lower-stakes pool than CrateData — ambient
--- loot found just by walking through a building, not from opening a crate.
--- Food/drink items (previously not obtainable anywhere in-game at all) plus
--- the Backpack and ONLY the tier 1 weapons; [stated] tier 2/3 weapons and
--- all armor stay crate-exclusive, not included here at all.
+-- Loot for LootFloorArea scatter in buildings (picked with CrateLoot.weighted_pick).
+-- Lower value than crates: food, drinks, the Backpack and tier 1 weapons only.
 return {
 	RollCount = {min = 0, max = 2}, -- placeholder, tune once tested — how many items one LootFloorArea marker rolls
 	LootPool = {
@@ -46,8 +39,7 @@ return {
 		{ItemName = "Soda 2", Weight = 10},
 		{ItemName = "Soda 3", Weight = 10},
 		{ItemName = "Coffee", Weight = 10},
-		-- Equipment — deliberately rarer than food/drink. [stated] no armor,
-		-- no tier 2/3 weapons here — those stay crate-only.
+		-- Rarer than food. No armor or tier 2/3 weapons (crate-only).
 		{ItemName = "Backpack", Weight = 4},
 		{ItemName = "Tier 1 Mace", Weight = 5},
 		{ItemName = "Tier 1 Twohanded Axe", Weight = 4},

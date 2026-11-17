@@ -35,13 +35,8 @@ local function Populate_Loot(crate_instance, contents)
 	current_crate = crate_instance
 	Clear_Items()
 
-	-- [stated] "stack amounts... of food items" -- CrateLoot now sends
-	-- {ItemName, Amount} entries instead of plain item-name strings, so a
-	-- stacked food roll shows as one row ("Beans Can x3") instead of 3
-	-- separate identical rows. take_crate_item_request still only ever
-	-- sends the item name -- CrateLoot resolves how much that whole entry
-	-- is actually worth server-side (see its take_item), so nothing here
-	-- needs to send Amount back.
+	-- One row per entry, e.g. "Beans Can x3". Only the name is sent back; the server
+	-- knows the amount.
 	for _, entry in ipairs(contents) do
 		local item_button = item_template:Clone()
 		item_button.Text = entry.Amount > 1 and (entry.ItemName .. " x" .. entry.Amount) or entry.ItemName

@@ -1,44 +1,16 @@
--- Tracks players infected by the Animal Frenzy event's parasite (see
--- AnimalFrenzyEvent.lua's infected-animal roll and WildLifeManager.lua's
--- Threat_Tick -> PlayerInfection.infect hook on a landed hit). Modeled
--- directly on PlayerHunger.lua's stage/timer/NOTIFY_INTERVAL shape, since
--- this is the same kind of feature: a value that rises over time, crossing
--- fixed thresholds into worse discrete stages, with each stage's effects
--- looked up once and applied by RequestChecker's shared Heartbeat loop
--- (Sync_Movement for WalkSpeed, a new Sync_Infection_Health for damage)
--- rather than this module touching Humanoid stats directly.
---
--- Model: one per-player InfectionTime that counts UP in real seconds while
--- infected (unlike hunger there's no "curing food" that subtracts from it —
--- only a cure station, which zeroes it out entirely). INFECTION_STAGES
--- below sits on fixed time bands and gets strictly worse the longer a
--- player stays infected uncured: longer stumbles closer together, a bigger
--- WalkSpeed penalty, and — only at the final stage — steady health damage.
--- Getting bitten again while already infected doesn't reset progress or
--- start a second infection, it accelerates the existing one (see
--- REINFECTION_TIME_BURST) — more exposure should read as worse, not free.
---
--- [design note] A player's Humanoid takes its movement from their OWN
--- client every frame, so the server calling Humanoid:Move() would just
--- fight the player's own input instead of overriding it — there's no clean
--- server-side way to puppet a player's walk direction the way
--- WildlifeManager puppets an animal's. "Losing control" is implemented
--- instead as a periodic BodyVelocity shove (something the server CAN force
--- reliably) — reads as an involuntary stumble in a random direction, not a
--- forced walk. If that doesn't feel "infected" enough once you see it in
--- game, full input lockout would need a client-side companion script
--- disabling the PlayerModule's controls on InfectionUpdated — a bigger,
--- more trust-sensitive change — happy to build that instead.
+-- Infection from Animal Frenzy's infected animals. Infection time counts up
+-- while infected and moves through worse stages: more frequent stumbles, slower
+-- walking, then health damage. A cure station clears it; another bite adds
+-- REINFECTION_TIME_BURST. Effects are applied by RequestChecker's Heartbeat loop.
+-- "Losing control" is a periodic BodyVelocity shove, since the server can't
+-- override a player's own movement input.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 -- Create this RemoteEvent in ReplicatedStorage (same place as
 -- EventWarning/HungerUpdated) — nothing creates it automatically.
 local infection_updated = ReplicatedStorage:WaitForChild("InfectionUpdated")
 local PlayerInfection = {}
 PlayerInfection.player_infection = {} -- [player] = {infected, time, next_stumble_at, last_notify_time}
--- Stage bands, ordered best (just infected) to worst — same "UpperBound is
--- the highest value still inside this stage" shape as PlayerHunger's
--- HUNGER_STAGES. Critical has no upper bound (final stage, matches
--- Starving). All numbers here are placeholders, tune once tested.
+-- UpperBound is the highest time (inclusive) in each stage. Placeholders.
 local INFECTION_STAGES = {
 	{
 		Name = "Early Infection",
@@ -86,10 +58,7 @@ local function Get_Stage_Index(elapsed)
 	end
 	return #INFECTION_STAGES
 end
--- Single lookup point for "what does this player's current infection stage
--- mean gameplay-wise" — mirrors PlayerHunger.get_stage_effects. Falls back
--- to a fully-healthy stand-in when not infected (or no data yet), same
--- defensive shape PlayerHunger/PlayerWeight use elsewhere.
+-- Gameplay effects of the current stage (healthy values when not infected).
 local NOT_INFECTED_EFFECTS = {WalkSpeedMultiplier = 1.0, HealthDamagePerSecond = 0}
 function PlayerInfection.get_stage_effects(player)
 	local data = PlayerInfection.player_infection[player]
@@ -102,11 +71,7 @@ function PlayerInfection.is_infected(player)
 	local data = PlayerInfection.player_infection[player]
 	return data ~= nil and data.infected
 end
--- Pushes the current infection state to the client as a single table —
--- more fields than HungerUpdated needs (stage index/count, the next
--- stage's name, a display color) so the HUD doesn't have to keep its own
--- copy of INFECTION_STAGES just to know what's coming or what color to
--- show.
+-- Sends the full state so the HUD needs no copy of INFECTION_STAGES.
 local function Fire_Update(player, data)
 	if not data.infected then
 		infection_updated:FireClient(player, {infected = false})
@@ -178,13 +143,8 @@ local function Stumble(character, force)
 		body_velocity:Destroy()
 	end)
 end
--- Called every Heartbeat for every player, same shape as
--- PlayerHunger.hunger_tick — advances InfectionTime, fires the involuntary
--- stumble at the CURRENT stage's frequency/force (re-read every stumble so
--- escalating into a worse stage immediately speeds/strengthens it, no
--- separate re-roll needed), auto-cures past AUTO_CURE_TIMEOUT, and pushes a
--- client update on a stage change OR every NOTIFY_INTERVAL seconds
--- regardless — the countdown needs to visibly tick down same as hunger's.
+-- Every Heartbeat: advances infection time, stumbles at the current stage's rate,
+-- auto-cures after AUTO_CURE_TIMEOUT, and pushes updates.
 function PlayerInfection.infection_tick(player, dt)
 	local data = PlayerInfection.player_infection[player]
 	if not data or not data.infected then

@@ -1,33 +1,10 @@
--- [stated] "implement a day/night cycle, along with a randomized weather
--- cycle" -- a self-contained, match-lifecycle-bound environmental system.
--- Scope as clarified: day/night is visual only for now (ClockTime plus
--- an Ambient/OutdoorAmbient/Brightness sweep so night actually reads as
--- dark -- Lighting.ClockTime alone doesn't dim those, they're authored
--- values, not something the engine derives from the sun position).
--- Weather cycles between Clear/Rain/Fog on its own independent timer, NOT
--- tied to time of day. The only gameplay effect asked for is reduced
--- visibility in Rain/Fog -- done the correct in-engine way, by tightening
--- Lighting.FogEnd, rather than anything touching combat/movement. Rain
--- also gets a lightweight per-player rain particle effect so "it's
--- raining" is actually visible, not just foggier -- built from Roblox's
--- default particle sprite (Texture left unset) rather than inventing an
--- asset id, since a bad asset id is exactly the kind of Studio error you
--- asked about earlier. Swap in a real raindrop decal's AssetId on the
--- ParticleEmitter later if you have one.
---
--- One Heartbeat connection drives both systems together so they can't
--- stomp each other's writes to the same Lighting properties: Ambient/
--- OutdoorAmbient/Brightness get a day-vs-night BASE value every tick that
--- weather then dims further on top of (ambient_mult/brightness_mult);
--- FogColor/FogStart/FogEnd are weather's alone, day/night never touches
--- them.
---
--- start()/stop() are both idempotent. Generate() calls stop() then
--- start() at the top of every match -- Lighting and Players are single
--- shared services, not per-match, so without this a second match on the
--- same server would stack a second competing Heartbeat connection (and a
--- second set of rain followers) on top of the first match's leftover one
--- instead of replacing it.
+-- Day/night cycle plus random weather (Clear/Rain/Fog). Day/night is visual:
+-- ClockTime plus an ambient/brightness sweep (ClockTime alone doesn't dim
+-- those). Weather runs on its own timer; Rain/Fog reduce visibility via FogEnd,
+-- and Rain adds a per-player particle effect. One Heartbeat drives both:
+-- day/night sets base Ambient/OutdoorAmbient/Brightness, weather scales them and
+-- owns the fog. Note this rewrites those Lighting properties every frame.
+-- start()/stop() are idempotent; Generate() calls stop() then start() each match.
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
@@ -42,12 +19,9 @@ end
 -- Placeholder magnitudes throughout this file, same as every other
 -- numeric pass in this project -- tune to taste once you've seen it live.
 local DAY_NIGHT = {
-	-- [stated] "fixed real-time day length" -- one full 24-hour sweep
-	-- takes this many real seconds, looping forever for the match.
+	-- Real seconds for one full 24-hour cycle.
 	day_length_seconds = 600,
-	-- Matches Configure_Lighting's existing ClockTime = 14 starting point
-	-- in StartMatch.lua, so the very first frame of the cycle looks
-	-- exactly like what Configure_Lighting already set up.
+	-- Matches Configure_Lighting's starting ClockTime.
 	start_clock_time = 14,
 	day_ambient = Color3.fromRGB(90, 90, 90),
 	day_outdoor_ambient = Color3.fromRGB(120, 120, 120),
@@ -75,17 +49,13 @@ local function Night_Factor(clock_time)
 		return Smooth_Step((clock_time - DAY_NIGHT.dusk_start) / (DAY_NIGHT.dusk_end - DAY_NIGHT.dusk_start))
 	end
 end
--- [stated] weather types: "Clear, Rain, Fog" -- each state's own look.
--- fog_end is where the real visibility reduction comes from: Clear's is
--- effectively unlimited, Rain/Fog pull it in hard.
+-- Per-weather look; fog_end sets visibility.
 local WEATHER_LOOK = {
 	Clear = {fog_color = Color3.fromRGB(192, 192, 192), fog_start = 0, fog_end = 100000, brightness_mult = 1, ambient_mult = 1},
 	Rain = {fog_color = Color3.fromRGB(120, 120, 130), fog_start = 0, fog_end = 700, brightness_mult = 0.7, ambient_mult = 0.85},
 	Fog = {fog_color = Color3.fromRGB(170, 170, 175), fog_start = 0, fog_end = 450, brightness_mult = 0.85, ambient_mult = 0.9},
 }
 local WEATHER = {
-	-- [stated] "roll completely independently" of time of day -- Clear
-	-- weighted heaviest so the map isn't rained/fogged on constantly.
 	weights = {Clear = 0.5, Rain = 0.25, Fog = 0.25},
 	min_duration = 120,
 	max_duration = 240,
@@ -93,9 +63,7 @@ local WEATHER = {
 	-- to the new state's numbers.
 	transition_seconds = 15,
 }
--- Picks a new weather name, weighted, excluding whatever's currently
--- active -- a plain weighted roll could otherwise re-pick the same state
--- and look like nothing changed, which defeats "randomized... cycle".
+-- Weighted pick that excludes the current weather.
 local function Roll_Weather(exclude)
 	local total = 0
 	for name, weight in pairs(WEATHER.weights) do
@@ -114,9 +82,7 @@ local function Roll_Weather(exclude)
 	end
 	return exclude or "Clear"
 end
--- Mutable state, fully rebuilt on every start() -- see the leaked-
--- connection comment up top for why this can't just persist between
--- matches untouched.
+-- Rebuilt on every start().
 local state = nil
 local heartbeat_connection = nil
 local player_removing_connection = nil
@@ -134,9 +100,7 @@ end
 local function Make_Rain_Follower()
 	local part = Instance.new("Part")
 	part.Name = "RainFollower"
-	-- A flat box, not a point -- Shape = Box below spreads raindrops
-	-- across this whole footprint above the player instead of straight
-	-- down a single line.
+	-- Flat emitter box so rain spreads over an area.
 	part.Size = Vector3.new(6, 1, 6)
 	part.Transparency = 1
 	part.CanCollide = false

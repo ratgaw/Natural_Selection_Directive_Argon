@@ -29,33 +29,10 @@ return {
 		Defense = 4, -- placeholder
 		Weight = 3, -- placeholder
 	},
-	-- Scavenger Armor -- [stated] unlike Gray Armor's 3-separate-pieces
-	-- design (Torso item, Legs item, Head item all sharing one
-	-- ArmorTemplate), this set has no dedicated leg piece: the jacket item
-	-- below fills BOTH the Torso and Legs slots at once from a single
-	-- equip, via EquipSlots = {"Torso", "Legs"}. equip_item already
-	-- supports this with no code changes -- it loops every slot in
-	-- EquipSlots and unequips/fills each one, so equipping this bumps
-	-- whatever was in Torso AND whatever was in Legs, and both slots end up
-	-- pointing at the same welded piece list.
-	-- [stated] both Scavenger and Raider are Tier 2 armor -- Tier here is
-	-- metadata only (nothing currently reads it programmatically, same as
-	-- weapons, which only bake their tier into the display name/WeaponModel
-	-- string) but is tracked explicitly since it's now how crate placement
-	-- below is decided: alongside Tier 2 Mace/Twohanded Axe in the Advanced
-	-- crate pool only, same as those weapons, not in Standard or Elite. Gray
-	-- Armor is left as-is (untiered, already spans both Standard AND
-	-- Advanced pools by its own earlier design) rather than retroactively
-	-- forced into this scheme.
-	-- [stated] because the Jacket alone covers both the Torso AND Legs
-	-- slots (one item doing the job of two, at correspondingly less total
-	-- Defense than a matched 2-slot set could offer), wearing it grants a
-	-- flat bonus to max carry weight via MaxCarryWeightBonus -- see
-	-- PlayerWeight.get_max_carry_weight, which now reads this the same way
-	-- it already reads Backpack.WeightReductionPercent. Only the Jacket
-	-- grants it, not the Helmet. Names/Defense/Weight/Icon/
-	-- MaxCarryWeightBonus are placeholders, tune once tested -- same as
-	-- Gray Armor above.
+	-- Scavenger Armor (Tier 2): the Jacket fills both Torso and Legs (EquipSlots
+	-- {"Torso", "Legs"}) and grants MaxCarryWeightBonus to make up for covering
+	-- two slots with less Defense. Tier is metadata only; Tier 2 armor goes in
+	-- the Advanced crate pool. Numbers are placeholders.
 	["Scavenger Jacket"] = {
 		Icon = "rbxassetid://0",
 		Description = "A scavenged coat, reinforced with scrap plating. Doesn't cover much, but it covers what it needs to.",
@@ -79,18 +56,8 @@ return {
 		Defense = 3, -- placeholder
 		Weight = 2, -- placeholder
 	},
-	-- Raider Armor -- [assumption, not yet confirmed] unlike Scavenger's
-	-- single combined Torso+Legs item, this set follows Gray Armor's older
-	-- 3-separate-items pattern instead (Torso item, Legs item, Head item,
-	-- all sharing one ArmorTemplate) since nothing indicated it should be
-	-- combined the Scavenger way. Easy to merge into one item spanning
-	-- multiple EquipSlots later if you'd rather it work like the Scavenger
-	-- Jacket -- just say so. [stated] Tier 2, same as Scavenger -- see the
-	-- comment above Scavenger Jacket for what that means here (Advanced
-	-- crate pool placement; no MaxCarryWeightBonus, since Raider keeps the
-	-- normal 3-separate-pieces coverage rather than trading slots away).
-	-- Names/Defense/Weight/Icon are placeholders, tune once tested -- same
-	-- as everywhere else in this file.
+	-- Raider Armor (Tier 2): three separate pieces like Gray Armor, no carry bonus.
+	-- Placeholders.
 	["Raider Chestplate"] = {
 		Icon = "rbxassetid://0",
 		Description = "Scrap plating lashed over a leather base. Heavy, crude, and it holds.",
@@ -169,21 +136,8 @@ return {
 		AttackCooldown = 0.5,
 		Weight = 10, -- placeholder
 	},
-	-- 1-Handed Swords -- [stated] "make it comparable to the mace, but make
-	-- adjustments where you deem appropriate for a sword versus a mace."
-	-- Same role (one-handed Weapon-slot melee, 3 tiers, ServerStorage.
-	-- PlayerItems.Weapons.1HandSwords.Tier1TrainingSword/Tier2HistoricalSword/
-	-- Tier3MilitarySword) but tuned as the faster/lighter counterpart to the
-	-- mace's blunt-force role rather than a straight reskin: lower Weight
-	-- and AttackStaminaCost (a blade swings easier than a length of pipe or
-	-- a flanged mace head), a shorter AttackCooldown (quicker, more nimble
-	-- swings), and a narrower ConeAngle (100 -> 90, a cutting/thrusting
-	-- stroke reads as more directed than a mace's wide crushing swing) --
-	-- traded off against slightly lower Damage and Range than the
-	-- same-tier mace, so the mace keeps its own niche as the harder-hitting,
-	-- longer-reaching, slower option rather than swords strictly
-	-- outclassing it. All numbers placeholders same as the rest of this
-	-- file -- tune freely once tested, this is just a starting split.
+	-- 1-handed swords: the faster, lighter counterpart to maces -- lower weight,
+	-- cost, cooldown and cone, slightly less damage and range. Placeholders.
 	["Tier 1 Sword"] = {
 		Icon = "rbxassetid://0",
 		Description = "A dulled training sword. Light and easy to swing, if not much of a weapon.",
@@ -262,41 +216,10 @@ return {
 		AttackCooldown = 0.80,
 		Weight = 15, -- placeholder
 	},
-	-- Bows -- [stated] "I've recently commisioned some bow models ...
-	-- separate peices for the bow string as well as a separate arrow
-	-- model" -- ranged, charge-draw weapons. Same "3 tiers of one weapon
-	-- type" pattern as Mace/Sword/Twohanded Axe above (ItemData key is
-	-- "Tier N Bow" regardless of each tier's own flavor/model, same as
-	-- "Tier N Sword" covers Training/Historical/Military) even though the
-	-- actual commissioned models underneath are three different shapes
-	-- (Sling/recurve Bow/Compound Bow), not one reskinned across tiers the
-	-- way Mace/Axe are.
-	-- Deliberately no Damage/Range/ConeAngle/AttackStaminaCost/
-	-- AttackCooldown fields here, unlike every melee weapon above -- those
-	-- live in PlayerCombat.lua's BOW_DATA table instead, keyed by
-	-- WeaponModel, since a charge-draw weapon's damage/range/accuracy all
-	-- scale continuously with how long you held the draw rather than
-	-- being one flat number each.
-	-- [stated/found] Tier 1 is a sling (cord + pouch, PlayerCombat.lua's
-	-- BOW_DATA["Sling"] entry), Tier 2 is the recurve bow confirmed
-	-- earlier. [stated] "the compound bow does not have separate strings
-	-- so I'll leave that one be for now" -- Tier 3 isn't filled in below
-	-- yet, same reason.
-	-- [stated/found] "attempt to perform arithmetic (mul) on nil and
-	-- number" the first time a bow got clicked with the regular attack
-	-- input -- CombatInput.lua (StarterPlayerScripts) had no way to tell a
-	-- ranged weapon apart from a melee one, so it fired the same
-	-- AttackRequest it always has, straight into PlayerCombat.attack,
-	-- which assumes every weapon has Damage/Range/ConeAngle/
-	-- AttackStaminaCost/AttackCooldown -- fields these two entries
-	-- deliberately don't have (see PlayerCombat.lua's BOW_DATA comment).
-	-- IsRanged is the explicit marker that fixes both ends: PlayerCombat.
-	-- attack now bails out immediately for any BOW_DATA-registered
-	-- WeaponModel regardless of this flag, but CombatInput.lua can only
-	-- read ItemData (PlayerCombat.lua's BOW_DATA table lives server-side
-	-- in ServerScriptService, not reachable from a LocalScript), so this
-	-- flag is what it checks client-side to decide whether a click means
-	-- "swing" (AttackRequest) or "start charging" (DrawStartRequest).
+	-- Bows (charge-draw ranged weapons). Tier 1 is a sling, Tier 2 a recurve bow;
+	-- Tier 3 (compound bow) isn't set up yet. Damage/range/accuracy live in
+	-- PlayerCombat's BOW_DATA (they scale with draw time). IsRanged tells
+	-- CombatInput (client) to send draw requests instead of AttackRequest.
 	["Tier 1 Bow"] = {
 		Icon = "rbxassetid://0",
 		Description = "A simple leather sling. Takes a moment to wind up, but it'll put a stone through flesh just the same.",
@@ -320,10 +243,7 @@ return {
 		Description = "Freshly harvested meat. Needs to be cooked before eating, probably.",
 		Weight = 1, -- placeholder
 	},
-	-- Stat-boost consumables — not Equipable, no EquipSlots; used via
-	-- shift-click -> UseItemRequest like minimap upgrades. Names/flavor
-	-- are placeholders, easy to rename once you've got a naming scheme
-	-- you like for these.
+	-- Stat-boost consumables, used via UseItemRequest. Names are placeholders.
 	["Strength Stim"] = {
 		Icon = "rbxassetid://0",
 		Description = "A single-use combat stimulant. Permanently increases Strength by 1.",
@@ -360,11 +280,8 @@ return {
 		StatBoost = {Stat = "Dexterity", Amount = 3},
 		Weight = 0.5, -- placeholder
 	},
-	-- Food consumables — not Equipable, no EquipSlots; used via shift-click
-	-- -> UseItemRequest like everything else above. Food.Tier picks which
-	-- PlayerHunger.TIER_FLOOR caps the eat, Food.Value is how much
-	-- HungerValue it removes toward that cap. Names/values are placeholders,
-	-- tune once tested — see [[roblox-game-progression]] for the 4-tier design.
+	-- Food: Food.Tier sets the hunger cap (PlayerHunger.TIER_FLOOR), Food.Value is
+	-- how much hunger it removes. Placeholders.
 	["Nutrient Paste"] = {
 		Icon = "rbxassetid://0",
 		Description = "Engineered ration, calorie-dense and shelf-stable for decades. The only food worth eating if you want to feel GOOD, not just full.",
@@ -389,23 +306,9 @@ return {
 		Food = {Tier = "Spoiled", Value = 100, SpoiledDamage = 5},
 		Weight = 1.5, -- placeholder
 	},
-	-- Real food/drink models, added once actual assets existed in
-	-- ServerStorage.PlayerItems (Food/Drink folders). All Safety Certified
-	-- tier (canned/packaged goods) — split into two size classes rather
-	-- than every item sharing one flat Value: "meal" cans/soups/ramen are
-	-- heartier (Value 350, matches the original Canned Rations placeholder
-	-- exactly), "snack" items (chips, chocolate, cereal, fruit cups) are
-	-- lighter (Value 180). All placeholders, tune once tested — same as
-	-- everywhere else in this file.
-	-- [stated/found] every food/drink entry below also carries Equipable +
-	-- EquipSlots={"Weapon"} + WeaponModel now: selecting one off the hotbar
-	-- welds it into the same hand slot a real weapon uses (Attach_Weapon,
-	-- via PlayerEquipment's now-widened template search), and AttackRequest
-	-- eats it instead of swinging whenever the equipped Weapon-slot item has
-	-- Food data (see RequestChecker). WeaponModel is also what DroppedItems
-	-- uses to give these a real ground model instead of the placeholder box
-	-- — one field now serves both "what's in my hand" and "what's on the
-	-- ground", same as it already did for actual weapons.
+	-- Packaged food (Safety Certified): meals Value 350, snacks Value 180.
+	-- Food and drinks are also equipable in the Weapon slot (WeaponModel): held in
+	-- hand, left-click eats; WeaponModel also gives them a real dropped model.
 	["Beans Can"] = {Icon = "rbxassetid://0", Description = "Canned beans. A field staple.", Food = {Tier = "Safety Certified", Value = 350}, Weight = 1.5, Equipable = true, EquipSlots = {"Weapon"}, WeaponModel = "BeansCan"},
 	["Bread Can"] = {Icon = "rbxassetid://0", Description = "Canned bread. Dense, heavy, filling.", Food = {Tier = "Safety Certified", Value = 350}, Weight = 1.5, Equipable = true, EquipSlots = {"Weapon"}, WeaponModel = "BreadCan"},
 	["Corn Can"] = {Icon = "rbxassetid://0", Description = "Canned corn, sweet and simple.", Food = {Tier = "Safety Certified", Value = 350}, Weight = 1.5, Equipable = true, EquipSlots = {"Weapon"}, WeaponModel = "CornCan"},
@@ -431,13 +334,8 @@ return {
 	["Chocolate 2"] = {Icon = "rbxassetid://0", Description = "A chocolate bar, different brand.", Food = {Tier = "Safety Certified", Value = 180}, Weight = 0.5, Equipable = true, EquipSlots = {"Weapon"}, WeaponModel = "Chocolate2"},
 	["Chocolate 3"] = {Icon = "rbxassetid://0", Description = "A chocolate bar, different brand.", Food = {Tier = "Safety Certified", Value = 180}, Weight = 0.5, Equipable = true, EquipSlots = {"Weapon"}, WeaponModel = "Chocolate3"},
 	["Chocolate 4"] = {Icon = "rbxassetid://0", Description = "A chocolate bar, different brand.", Food = {Tier = "Safety Certified", Value = 180}, Weight = 0.5, Equipable = true, EquipSlots = {"Weapon"}, WeaponModel = "Chocolate4"},
-	-- Drinks — [stated] deliberately different from food rather than just a
-	-- reskin: smaller hunger relief than an equivalent-size meal (drinks
-	-- aren't filling), but an instant stamina restore on top (refreshing) —
-	-- reuses the existing hunger + stamina systems via Food.StaminaRestore
-	-- rather than adding a separate thirst mechanic. Coffee trades the
-	-- least hunger relief for the biggest stamina kick (caffeine); Cola
-	-- restores a bit more than plain Soda.
+	-- Drinks: less hunger relief than food, plus an instant stamina restore
+	-- (Food.StaminaRestore). Coffee gives the most stamina.
 	["Bloxy Cola 1"] = {Icon = "rbxassetid://0", Description = "A can of Bloxy Cola.", Food = {Tier = "Safety Certified", Value = 100, StaminaRestore = 20}, Weight = 0.5, Equipable = true, EquipSlots = {"Weapon"}, WeaponModel = "BloxyCola1"},
 	["Bloxy Cola 2"] = {Icon = "rbxassetid://0", Description = "A can of Bloxy Cola, different can art.", Food = {Tier = "Safety Certified", Value = 100, StaminaRestore = 20}, Weight = 0.5, Equipable = true, EquipSlots = {"Weapon"}, WeaponModel = "BloxyCola2"},
 	["Bloxy Cola 3"] = {Icon = "rbxassetid://0", Description = "A can of Bloxy Cola, different can art.", Food = {Tier = "Safety Certified", Value = 100, StaminaRestore = 20}, Weight = 0.5, Equipable = true, EquipSlots = {"Weapon"}, WeaponModel = "BloxyCola3"},
@@ -446,13 +344,8 @@ return {
 	["Soda 2"] = {Icon = "rbxassetid://0", Description = "A can of soda, different flavor.", Food = {Tier = "Safety Certified", Value = 90, StaminaRestore = 18}, Weight = 0.5, Equipable = true, EquipSlots = {"Weapon"}, WeaponModel = "Soda2"},
 	["Soda 3"] = {Icon = "rbxassetid://0", Description = "A can of soda, different flavor.", Food = {Tier = "Safety Certified", Value = 90, StaminaRestore = 18}, Weight = 0.5, Equipable = true, EquipSlots = {"Weapon"}, WeaponModel = "Soda3"},
 	["Coffee"] = {Icon = "rbxassetid://0", Description = "Black coffee, gone cold. Barely fills you up, but it'll keep you moving.", Food = {Tier = "Safety Certified", Value = 60, StaminaRestore = 30}, Weight = 0.3, Equipable = true, EquipSlots = {"Weapon"}, WeaponModel = "Coffee"},
-	-- Backpack — [stated] equipment slot that lightens carried load by a
-	-- PERCENTAGE rather than raising max capacity, at the cost of burning
-	-- more stamina while sprinting. WeightReductionPercent only discounts
-	-- inventory weight (PlayerWeight.get_carried_weight), not equipped
-	-- gear weight — a bag doesn't lighten armor already worn on your body.
-	-- SprintDrainBonusPercent is read by RequestChecker's Sync_Movement.
-	-- Both placeholders, tune once tested.
+	-- Backpack: reduces inventory weight by a percentage (not worn gear), but
+	-- sprinting costs more stamina. Placeholders.
 	["Backpack"] = {
 		Icon = "rbxassetid://0",
 		Description = "A sturdy pack that reorganizes your carried gear, lightening the load — at the cost of faster stamina burn while sprinting.",

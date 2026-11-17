@@ -6,12 +6,7 @@ local current_players = players:GetPlayers()
 local start_match_sig = RS:WaitForChild("GenerateArena")
 local inventory_update_sig = RS:WaitForChild("InventoryUpdated")
 local equipment_update_sig = RS:WaitForChild("EquipmentUpdated")
--- [stated] "/dev text command... can fly" -- the actual flight physics
--- live client-side (DevFlyController.lua, StarterPlayerScripts, same
--- "client owns its own character's movement by default" model normal
--- WASD movement already relies on) -- this just tells that player's own
--- client to turn it on/off. Needs manual creation in ReplicatedStorage,
--- same outstanding step as every other new remote this project.
+-- /dev flight runs client-side (DevFlyController); this toggles it.
 local dev_fly_toggled = RS:WaitForChild("DevFlyToggled")
 -- Grabbing modules as variables
 local start_match = require(script.StartMatch)
@@ -30,24 +25,11 @@ local events_folder = script:WaitForChild("ArenaEvents")
 local zombie_event = require(events_folder:WaitForChild("ZombieEvent"))
 local supply_drop_event = require(events_folder:WaitForChild("SupplyDropEvent"))
 local animal_frenzy_event = require(events_folder:WaitForChild("AnimalFrenzyEvent"))
--- [stated] "forest fire event... lasting damage to the trees... persist
--- throughout the match, dealing damage to players... random tree trunks
--- falling near the players" -- ForestFireEvent.lua needs to actually be
--- placed in ArenaEvents in Studio, same outstanding manual step every new
--- module/event in this project has needed.
 local forest_fire_event = require(events_folder:WaitForChild("ForestFireEvent"))
--- [stated] "I now want to add a new event, the flood" -- same outstanding
--- manual step as every other new event module: FloodEvent.lua needs to
--- actually be placed in ArenaEvents in Studio (ServerScriptService >
--- ArenaManager > ArenaEvents, alongside the other four) before this
--- WaitForChild resolves.
 local flood_event = require(events_folder:WaitForChild("FloodEvent"))
 local arena_event_scheduler = require(events_folder:WaitForChild("ArenaEventScheduler"))
--- Fall damage — didn't exist anywhere in the codebase before this, needed
--- to exist before [stated] "Endurance -> reduced fall damage" had anything
--- to reduce. No damage below SAFE_FALL_DISTANCE; above it, damage scales
--- linearly with how far past that the character fell. Placeholders, tune
--- once tested.
+-- Fall damage beyond SAFE distance scales linearly; Endurance reduces it.
+-- Placeholders.
 local FALL_DAMAGE_SAFE_DISTANCE = 20 -- studs
 local FALL_DAMAGE_PER_STUD = 2
 local ENDURANCE_FALL_DAMAGE_REDUCTION_PER_POINT = 0.05
@@ -59,36 +41,10 @@ arena_event_scheduler.register_event("Supply Drop", supply_drop_event.trigger)
 arena_event_scheduler.register_event("Animal Frenzy", animal_frenzy_event.trigger)
 arena_event_scheduler.register_event("Forest Fire", forest_fire_event.trigger)
 arena_event_scheduler.register_event("Flood", flood_event.trigger)
--- [stated] "a command to manually launch the forest fire event so I can
--- test it faster than waiting for it to naturally occur" -- TESTING ONLY,
--- same spirit as test_give_item/the eliminated_appearances self-seed
--- below. Keyed by the exact lowercased message so new debug commands are
--- just another table entry, no new if/elseif chain needed. Wired to each
--- player's own Chatted event further down (Players.PlayerAdded) rather
--- than a Players-level signal -- Chatted only exists per-Player.
--- Player.Chatted is the LEGACY chat signal -- it still fires through
--- TextChatService's default legacy-chat bridge in most experiences, but
--- if this game has that bridge turned off, nothing typed in chat will
--- reach this; swap to TextChatService.MessageReceived instead if so.
--- [found] this is an actual in-game CHAT command, typed in the chat
--- window during a live test -- NOT something to paste into Studio's
--- Command Bar (that runs Lua, and "/forestfire" isn't valid Lua). Keys
--- have no leading "/" -- the handler below strips one off the incoming
--- message before matching, since opening chat by pressing the "/" key
--- itself consumes that character as the "open chat" hotkey rather than
--- sending it as part of the message, so what actually arrives can be
--- either "/forestfire" or just "forestfire" depending on how chat was
--- opened. Typing the key WITH its own leading slash here would only ever
--- match the first case.
--- [stated] "/dev text command that would make my character invincible,
--- faster, and can fly, along with never getting hungry" -- TESTING ONLY,
--- same spirit as the rest of this block. A toggle rather than a one-shot
--- (typing it again turns everything back off), so dev_mode_players tracks
--- who currently has it on; everything else (invincibility, hunger) is
--- just a flag flip on another module, but WalkSpeed needs its own
--- continuous reassertion below since Countdown_Player_Movement/
--- Freeze_Players (arena event cinematic pans) both stomp WalkSpeed back
--- to the normal value periodically, independent of dev mode.
+-- TESTING ONLY chat commands. Keys have no leading "/" (it's stripped from the
+-- message, since pressing / to open chat may or may not include it). Uses the
+-- legacy Player.Chatted signal; switch to TextChatService if that stops firing.
+-- /dev toggles invincibility, extra speed, flight and no hunger.
 local dev_mode_players = {} -- [player] = true while /dev is active
 local DEV_WALK_SPEED = 50
 local NORMAL_WALK_SPEED = 16
@@ -105,10 +61,9 @@ local function Set_Dev_Mode(player, enabled)
 		end
 	end
 end
--- Keeps DEV_WALK_SPEED actually sticking for as long as dev mode is on --
--- a single set on toggle-in would otherwise get silently overwritten the
--- next time Countdown_Player_Movement or an arena event's Freeze_Players
--- runs, since neither of those knows or cares about dev mode.
+-- Re-applies the dev walk speed every 0.5 s since other code also sets
+-- WalkSpeed. (RequestChecker's Sync_Movement overrides it every frame, so this
+-- currently loses.)
 task.spawn(function()
 	while true do
 		for player in pairs(dev_mode_players) do
@@ -128,12 +83,7 @@ local DEBUG_COMMANDS = {
 			warn("[ArenaManager] /forestfire: no event registered under the exact name 'Forest Fire'")
 		end
 	end,
-	-- [stated] "a / text command for both the animal frenzy event and the
-	-- zombie event so I can manually trigger them for testing" -- same
-	-- force_trigger/ArenaEventScheduler pattern as /forestfire above, just
-	-- pointed at the other two event names exactly as register_event
-	-- spelled them further up ("Zombies", "Animal Frenzy") -- force_trigger
-	-- matches by that exact string, so these have to agree with it.
+	-- Names must match the register_event names exactly.
 	zombies = function(player)
 		local found = arena_event_scheduler.force_trigger("Zombies", game_data)
 		if not found then
@@ -146,9 +96,6 @@ local DEBUG_COMMANDS = {
 			warn("[ArenaManager] /animalfrenzy: no event registered under the exact name 'Animal Frenzy'")
 		end
 	end,
-	-- [stated] same "test it faster than waiting for it to naturally occur"
-	-- need as the three above, now that Flood is registered -- matches
-	-- "Flood" exactly as spelled in the register_event call further up.
 	flood = function(player)
 		local found = arena_event_scheduler.force_trigger("Flood", game_data)
 		if not found then
@@ -163,9 +110,8 @@ game_data.participants = {}
 for _, p in ipairs(current_players) do
 	game_data.participants[p] = true
 end
--- TESTING ONLY — seeds the zombie appearance pool with your own live
--- character, so you can verify appearance capture works without needing
--- to actually die first. Remove once zombies are confirmed working.
+-- TESTING ONLY: seeds the zombie appearance pool with your own character.
+-- Remove once zombies are confirmed working.
 local eliminated_appearances = require(script:WaitForChild("EliminatedAppearances"))
 -- Test function for giving players items
 local function test_give_item(player, item_name, amount)
@@ -183,28 +129,20 @@ start_match_sig.OnServerEvent:Connect(function(player)
 		for _, p in ipairs(current_players) do
 			game_data.participants[p] = true
 		end
-		-- Every participant starts the new round with 1/1/1 stats, an
-		-- empty inventory, and no equipped gear — remove_equipment first
-		-- so any currently-worn armor/weapon parts actually get detached
-		-- from the character, not just cleared from data; new_equipment
-		-- then resets the (now-empty) equipped table itself.
+		-- Each participant starts the round with base stats, an empty inventory and no
+		-- gear (remove_equipment first so worn parts are actually detached).
 		for p in pairs(game_data.participants) do
 			player_equipment.remove_equipment(p)
 			player_equipment.new_equipment(p)
 			player_inventory.new_inventory(p)
 			player_stats.new_player(p)
-			-- Hunger resets to Normal every round same as stats/inventory —
-			-- unlike PlayerWeight it IS stateful, so this needs an actual
-			-- new_player call, not just a re-notify.
 			player_hunger.new_player(p)
 			-- Same reasoning as PlayerHunger — a leftover infection from a
 			-- previous round shouldn't carry into a fresh one.
 			player_infection.new_player(p)
 			equipment_update_sig:FireClient(p, player_equipment.player_equipment[p])
 			inventory_update_sig:FireClient(p, player_inventory.player_inventories[p])
-			-- PlayerWeight keeps no state of its own (see its file header) so
-			-- there's no new_player call to make here — just re-notify now
-			-- that inventory/equipment/stats have all been wiped for the round.
+			-- PlayerWeight has no state; just re-notify after the reset.
 			player_weight.notify(p)
 		end
 		start_match.Generate(game_data)
@@ -222,7 +160,7 @@ players.PlayerAdded:Connect(function(player)
 	player_minimap.new_player(player)
 	player_stamina.new_player(player)
 	player_stats.new_player(player)
-	player_weight.notify(player) -- stateless module, see PlayerWeight's file header — just an initial push so the client isn't blank
+	player_weight.notify(player) -- initial push so the client isn't blank
 	player_hunger.new_player(player)
 	player_infection.new_player(player)
 	player.Chatted:Connect(function(message)
@@ -250,20 +188,9 @@ players.PlayerAdded:Connect(function(player)
 		end
 		local humanoid = character:WaitForChild("Humanoid")
 		local root = character:WaitForChild("HumanoidRootPart")
-		-- Tracks the Y position a freefall started at, so Landed can work
-		-- out how far the character actually fell. Reset to nil whenever a
-		-- freefall isn't currently in progress, so a Landed with nothing to
-		-- compare against (e.g. this connection firing mid-fall on rejoin)
-		-- can't apply damage off a bogus baseline.
+		-- Y where the current freefall began; nil when not falling.
 		local freefall_start_y = nil
-		-- [stated] jumping is one of the actions that speeds up hunger — no
-		-- dedicated "jump" remote/request exists (jumping is Roblox's own
-		-- default movement, not something this project's networking touches),
-		-- so this is the actual moment a jump starts: Humanoid's own
-		-- StateChanged firing into its built-in Jumping state. Freefall/
-		-- Landed (also built-in Humanoid states) are reused here for fall
-		-- damage — [stated] "Endurance -> reduced fall damage" needed a fall
-		-- damage system to exist at all first, since there wasn't one.
+		-- Jumping pulses hunger; Freefall/Landed drive fall damage.
 		humanoid.StateChanged:Connect(function(_, new_state)
 			if new_state == Enum.HumanoidStateType.Jumping then
 				player_hunger.pulse(player)

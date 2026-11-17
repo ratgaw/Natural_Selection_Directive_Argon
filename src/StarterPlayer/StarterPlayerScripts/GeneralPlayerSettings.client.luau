@@ -12,16 +12,11 @@ local hotbar = inventory:WaitForChild("HotBar")
 local match_start = ReplicatedStorage:WaitForChild("MatchStarted")
 -- Setting up request signal connection variables
 local sprint_request = ReplicatedStorage:WaitForChild("SprintRequest")
--- Tracks the raw key state separately from what's actually been sent to
--- the server, so holding shift while opening/closing the inventory (which
--- fires no new InputBegan/InputEnded of its own) still gets reconciled.
+-- Raw shift state, separate from what was last sent to the server.
 local shift_held = false
 local sprint_request_sent = false
 local function Sync_Sprint_Request()
-	-- Sprinting is suppressed entirely while an inventory-style GUI is
-	-- open — holding shift to browse the inventory shouldn't silently
-	-- start sprinting (and draining stamina) if the player moves around
-	-- while it's up.
+	-- No sprinting while a GUI is open.
 	local wants_sprint = shift_held and not camera_lock_state.gui_open
 	if wants_sprint ~= sprint_request_sent then
 		sprint_request_sent = wants_sprint
@@ -45,12 +40,7 @@ UserInputService.InputEnded:Connect(function(input)
 		Sync_Sprint_Request()
 	end
 end)
--- Also re-check every Heartbeat — the InputBegan/InputEnded handlers above
--- only fire on a genuine key press/release, so they can't by themselves
--- catch the inventory opening or closing while shift is already being
--- held down; this is what actually cancels sprint the moment the GUI
--- opens, and re-allows it the moment the GUI closes (if shift is still
--- down at that point).
+-- Re-check every frame to catch a GUI opening or closing while shift is held.
 RunService.Heartbeat:Connect(Sync_Sprint_Request)
 -- Turns on hotbar
 match_start.OnClientEvent:Connect(function()

@@ -1,14 +1,6 @@
--- Animal Frenzy arena event: every living animal on the map turns
--- hyper-aggressive with unlimited aggro range for a fixed duration, a
--- fresh wave of predators is called in from the forest to join the
--- rampage, and a random handful of animals come out of it PERMANENTLY
--- infected -- hyper-aggressive forever, and able to pass the infection to
--- any player they land a hit on (see PlayerInfection.lua for what being
--- infected does, and WildLifeManager.lua's Threat_Tick for the actual
--- infect-on-hit call). A few cure stations are dropped on the map the
--- first time this fires, so an infected player has somewhere to go.
--- Registered into the shared scheduler by ArenaManager.lua, same as
--- ZombieEvent/SupplyDropEvent.
+-- Animal Frenzy: every animal turns hyper-aggressive for a while, extra
+-- animals spawn, and a share of animals become permanently infected (their hits
+-- infect players, see PlayerInfection). Cure stations appear the first time.
 local ServerScriptService = game:GetService("ServerScriptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -19,54 +11,26 @@ local WildLifeManager = require(ArenaManagerFolder:WaitForChild("WildLifeManager
 local SettlementData = require(ArenaManagerFolder:WaitForChild("SettlementData"))
 local PlayerInfection = require(ArenaManagerFolder:WaitForChild("PlayerInfection"))
 local event_warning = ReplicatedStorage:WaitForChild("EventWarning")
--- [stated] "is it possible to add their locations to every player's
--- minimap as a white square icon" -- same RemoteEvent-driven marker
--- pattern MinimapControl.lua already uses for SupplyDropEvent's beacon
--- crate (BeaconCrateSpawned/BeaconCrateLooted): server fires the whole
--- station instance to every client, the client turns that into a Frame
--- positioned via the minimap's existing World_To_Minimap_Position. Add a
--- RemoteEvent named exactly "CureStationSpawned" under ReplicatedStorage
--- in Studio (same place EventWarning/MatchStarted/BeaconCrateSpawned
--- already live) -- this script only ever WaitForChild's it, same as every
--- other RemoteEvent reference in this file, it doesn't create one itself.
--- No corresponding "removed" event -- unlike the beacon crate, cure
--- stations are never destroyed once placed (Spawn_Cure_Stations only ever
--- runs once per match), so there's nothing for the minimap to ever clear.
+-- Tells clients to show each cure station on the minimap. Stations are never
+-- removed, so there's no matching "removed" event.
 local cure_station_spawned = ReplicatedStorage:WaitForChild("CureStationSpawned")
 local AnimalFrenzyEvent = {}
 -- Placeholders, tune once tested.
 local FRENZY_DURATION = 45 -- seconds the non-infected animals stay hyper-aggressive
 local EXTRA_SPAWN_COUNT = 8 -- reinforcements called in from the forest each trigger
--- [stated] "increase the ratio of those infected to 55% of all animals on
--- the map" -- replaces the old INFECTED_COUNT_MIN/MAX fixed 2-5 range
--- (same regardless of how many animals were actually out there) with a
--- share of whatever's currently alive, computed in trigger() below right
--- after reinforcements spawn -- so a bigger population infects more
--- animals in absolute terms, not just the same small handful every time.
+-- Share of all live animals (after reinforcements) that become infected.
 local INFECTED_RATIO = 0.55
 local CURE_STATION_COUNT = 3
--- Forest-flavored species only -- mirrors StartMatch's WILDLIFE_SPAWN_TABLE
--- biome tags (Bear/Wolf/Fox/Deer/Raccoon all include Forest). Buffalo and
--- Rat are Field/Settlement specialists and deliberately excluded from the
--- "more animals emerge from the forest" reinforcement wave.
+-- Reinforcement species. Must exist in WildLifeManager's WILDLIFE_STATS or
+-- the spawn silently fails.
 local FOREST_SPECIES = {"Bear", "Wolf", "Fox", "Deer", "Raccoon"}
 -- Only spawn the cure stations once per match, even if Animal Frenzy fires
 -- more than once -- "a few cure stations on the map", not a growing pile.
 local cure_stations_spawned = false
--- Must match LIVE_TREE_TAG/LIVE_PLANT_TAG in StartMatch.lua's spawn loops
--- (same tags ForestFireEvent.lua keys off of) -- used below by
--- Clear_Vegetation_Near to find actual tree/plant Models near a spawn
--- point, not just raw parts.
+-- Same tags as StartMatch/ForestFireEvent.
 local LIVE_TREE_TAG = "LiveTree"
 local LIVE_PLANT_TAG = "LivePlant"
--- [stated] "the obelisks if spawning in the woods will spawn on top of
--- the trees" -- two separate problems, both fixed here. First: this
--- raycast had NO RaycastParams at all, so it stopped at whatever it hit
--- FIRST going straight down -- a tree's canopy/trunk, a rock, anything --
--- same "ray hits the top of the tree" bug ForestFireEvent.lua's
--- Compute_Base_Position hit and fixed the same way: an Include filter
--- that can ONLY ever hit Terrain, so the obelisk's height always comes
--- from the real ground, never a tree it happened to clip on the way down.
+-- Terrain-only raycast so stations don't land on top of trees.
 local GROUND_RAYCAST_START_HEIGHT = 1000
 local GROUND_RAYCAST_DISTANCE = 2000
 local terrain_raycast_params = RaycastParams.new()
@@ -76,10 +40,7 @@ local function Get_Ground_Height(x, z)
 	local result = workspace:Raycast(Vector3.new(x, GROUND_RAYCAST_START_HEIGHT, z), Vector3.new(0, -GROUND_RAYCAST_DISTANCE, 0), terrain_raycast_params)
 	return result and result.Position.Y or nil
 end
--- Walks up from a hit part to whichever ancestor actually carries the tag
--- -- same reasoning as ForestFireEvent.lua's own Find_Tagged_Ancestor: a
--- tree's Trunk/Leaves could themselves be Models sitting a level or two
--- below the actual tagged tree instance.
+-- Walks up to the tagged ancestor (tree parts can be nested groups).
 local function Find_Tagged_Ancestor(instance, tag)
 	local current = instance
 	while current and current ~= workspace do
@@ -90,15 +51,7 @@ local function Find_Tagged_Ancestor(instance, tag)
 	end
 	return nil
 end
--- [stated] "whenever the stations spawn they will clear away all
--- vegetation within a 10 stud radius of the obelisk prior to it spawning
--- to ensure it spawns nicely" -- second half of the fix above: even with
--- the ground-height raycast now correct, a tree standing right where the
--- obelisk lands would still visually clip through its shaft. Finds every
--- tagged tree/plant Model whose parts overlap a sphere around the spawn
--- point and destroys each one once (GetPartBoundsInRadius can return
--- several parts belonging to the same Model, so this dedupes by Model
--- before destroying).
+-- Clears tagged trees/plants around a station's spot before building it.
 local CLEAR_VEGETATION_RADIUS = 10
 local function Clear_Vegetation_Near(position)
 	local overlap_params = OverlapParams.new()
@@ -116,11 +69,8 @@ local function Clear_Vegetation_Near(position)
 	end
 	return removed_count
 end
--- Same "mostly near a settlement, sometimes anywhere" bias ZombieEvent
--- uses for its own spawn point -- reused here so reinforcements read as
--- "coming out of the treeline near where the fight already is" rather
--- than landing evenly across the whole map, and so cure stations end up
--- somewhere players are likely to actually pass by.
+-- Usually near a settlement, sometimes anywhere -- where players are likely
+-- to pass.
 local function Get_Spawn_Point()
 	local zones = SettlementData.get_zones()
 	local block_size = SettlementData.get_block_size()
@@ -143,27 +93,15 @@ local function Spawn_Reinforcements(count)
 		task.wait(0.15)
 	end
 end
--- [stated] "for the healing stations can we make them like metal
--- obelisks?" -- replaces the flat neon platform + glowing beam with an
--- actual tapered monument: a stone pedestal, a two-section metal shaft
--- that narrows partway up (so it genuinely reads as tapering rather than
--- just a tall box), and a 4-sided pyramid capstone (Enum.MeshType.Pyramid
--- on a plain Part -- a built-in legacy mesh shape, same "no custom asset
--- needed" approach this project already uses for Fire/Smoke, rather than
--- hand-building a point out of WedgeParts). Still deliberately simple/
--- visible rather than wired into the minimap yet -- revisit once
--- PlayerMinimap's API for a custom marker is confirmed; I don't have that
--- file in front of me to guess its shape. The glowing beam is gone (it
--- doesn't fit a metal-obelisk look), so a vertical glowing rune strip
--- embedded in the shaft's face plus a PointLight near the top take over
--- its job of staying visible/findable at a distance.
+-- Cure station: stone pedestal, two-section metal shaft, pyramid cap, and a
+-- glowing white rune strip with a light so it's visible from a distance.
 local OBELISK_SHAFT_WIDTH = 4 -- width of the lower, wider shaft section
 local OBELISK_LOWER_HEIGHT = 14
 local OBELISK_UPPER_HEIGHT = 8 -- the narrower section the shaft steps in to
 local OBELISK_CAP_HEIGHT = 5
 local OBELISK_METAL_COLOR = Color3.fromRGB(58, 60, 64) -- dark weathered metal
 local OBELISK_PEDESTAL_COLOR = Color3.fromRGB(45, 45, 47) -- stone base, slightly darker
-local OBELISK_ACCENT_COLOR = Color3.fromRGB(255, 255, 255) -- [stated] "change the led strip to white"
+local OBELISK_ACCENT_COLOR = Color3.fromRGB(255, 255, 255) -- rune strip and light
 local function Build_Cure_Station(position)
 	local base = Instance.new("Part")
 	base.Name = "CureStation"
@@ -195,10 +133,7 @@ local function Build_Cure_Station(position)
 	upper_shaft.Color = OBELISK_METAL_COLOR
 	upper_shaft.CFrame = lower_shaft.CFrame * CFrame.new(0, OBELISK_LOWER_HEIGHT / 2 + OBELISK_UPPER_HEIGHT / 2, 0)
 	upper_shaft.Parent = base
-	-- Pyramid capstone -- CanCollide off since SpecialMesh only changes
-	-- how the part RENDERS, not its physical shape; leaving collision on
-	-- would hitbox the cap as if it were still a full box poking out past
-	-- the visible point.
+	-- SpecialMesh only changes rendering, so turn off collision on the cap.
 	local cap = Instance.new("Part")
 	cap.Name = "ObeliskCap"
 	cap.Size = Vector3.new(OBELISK_SHAFT_WIDTH, OBELISK_CAP_HEIGHT, OBELISK_SHAFT_WIDTH)
@@ -212,10 +147,6 @@ local function Build_Cure_Station(position)
 	local cap_mesh = Instance.new("SpecialMesh")
 	cap_mesh.MeshType = Enum.MeshType.Pyramid
 	cap_mesh.Parent = cap
-	-- Glowing rune strip down the upper shaft's face -- what actually
-	-- keeps this findable/visible at a distance now that the old beam is
-	-- gone, and still reads as "this is the cure station" via the same
-	-- [stated] "change the led strip to white" -- accent color below.
 	local rune = Instance.new("Part")
 	rune.Name = "ObeliskRune"
 	rune.Size = Vector3.new(0.4, OBELISK_UPPER_HEIGHT * 0.8, 0.6)
@@ -245,11 +176,6 @@ local function Build_Cure_Station(position)
 			PlayerInfection.cure(player)
 		end
 	end)
-	-- Fired once the whole obelisk is assembled, not right after `base` is
-	-- created -- GetPivot() on the client just needs base.CFrame, already
-	-- set at creation, but waiting until here keeps this call next to
-	-- everything else that's "last thing this function does" rather than
-	-- wedged in the middle of the obelisk's own part-by-part assembly.
 	cure_station_spawned:FireAllClients(base)
 end
 local function Spawn_Cure_Stations(count)
@@ -273,17 +199,10 @@ local function Send_Warnings()
 end
 function AnimalFrenzyEvent.trigger(game_data)
 	Send_Warnings()
-	-- Reinforcements spawn BEFORE start_frenzy so they're already on the
-	-- map when start_frenzy snapshots every active animal -- the fresh
-	-- arrivals get swept into the same aggression/infection roll as
-	-- everything already out there instead of wandering in calm.
+	-- Spawn reinforcements first so start_frenzy includes them.
 	Spawn_Reinforcements(EXTRA_SPAWN_COUNT)
 	Spawn_Cure_Stations(CURE_STATION_COUNT)
-	-- Taken HERE (after reinforcements spawn, before start_frenzy) so this
-	-- count matches exactly what start_frenzy is about to snapshot via its
-	-- own get_active_animals() call -- same ordering the old fixed-range
-	-- roll relied on, just reading the population first instead of
-	-- ignoring it.
+	-- Counted after reinforcements, matching what start_frenzy sees.
 	local alive_count = #WildLifeManager.get_active_animals()
 	local infected_count = alive_count > 0 and math.max(1, math.floor(alive_count * INFECTED_RATIO)) or 0
 	WildLifeManager.start_frenzy({duration = FRENZY_DURATION, infected_count = infected_count})

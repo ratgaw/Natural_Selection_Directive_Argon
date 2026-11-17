@@ -1,5 +1,4 @@
 local ServerScriptService = game:GetService("ServerScriptService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local PathfindingService = game:GetService("PathfindingService")
 local CollectionService = game:GetService("CollectionService")
@@ -8,51 +7,35 @@ local PlayerEquipment = require(ServerScriptService:WaitForChild("PlayerEquipmen
 local PlayerCombat = require(ServerScriptService:WaitForChild("PlayerCombat"))
 local EliminatedAppearances = require(ServerScriptService:WaitForChild("ArenaManager"):WaitForChild("EliminatedAppearances"))
 local SettlementData = require(ServerScriptService:WaitForChild("ArenaManager"):WaitForChild("SettlementData"))
-local PlayerMinimap = require(ServerScriptService:WaitForChild("ArenaManager"):WaitForChild("PlayerMinimap"))
-local event_warning = ReplicatedStorage:WaitForChild("EventWarning")
 local ZombieEvent = {}
 local match_start_time = nil
 local BASE_ZOMBIE_COUNT = 10
 local ZOMBIES_PER_MINUTE = 0.33
 local MAX_ZOMBIES = 30
 local ZOMBIE_HEALTH = 80
-local ZOMBIE_WALK_SPEED = 15 -- was 12 — above the run-animation threshold below
+local ZOMBIE_WALK_SPEED = 15 -- above RUN_SPEED_THRESHOLD so zombies use the run animation
 local ZOMBIE_DAMAGE = 10
 local ZOMBIE_ATTACK_RANGE = 5
 local ZOMBIE_ATTACK_COOLDOWN = 1.2
--- Inside this range (but still outside ZOMBIE_ATTACK_RANGE), skip
--- PathfindingService entirely and walk straight at the player instead.
--- Waypoint recomputation (every PATH_REFRESH_INTERVAL, or whenever the
--- target moves >5 studs) can pick a slightly different angle each time,
--- which reads as the zombie "dodging" a swing mid-windup even though
--- it's just ordinary path churn. This close, obstacle avoidance no
--- longer matters — the hard part of the chase is already done — so a
--- straight line in gives a predictable target to actually hit.
+-- Within this range, walk straight at the player instead of pathfinding, so
+-- path recomputes don't look like dodging.
 local ZOMBIE_DIRECT_CHASE_RANGE = 10
-local ZOMBIE_AGGRO_RANGE = 110 -- was 60
+local ZOMBIE_AGGRO_RANGE = 110
 local PATH_REFRESH_INTERVAL = 2
 local WAYPOINT_REACHED_DISTANCE = 3
 local COLLISION_GROUP = "Zombies"
 local RUN_SPEED_THRESHOLD = 16 -- studs/sec — above this, play the run track instead of walk
 local SETTLEMENT_SPAWN_CHANCE = 0.7
 local COMBAT_TARGET_TAG = "CombatTarget"
--- [stated] "I've added zombie animations for their idle, attack, and
--- movement" -- Idle and Attack are new slots; Walk/Run (the "movement"
--- animations) already existed. Drop each real published asset ID in here.
--- Idle/Walk/Run still fall back to a live player's own Animate-script
--- animation if left at the placeholder (see Get_Player_Animation_Id
--- below) -- useful for filling slots in one at a time. Attack has no real
--- player equivalent to borrow (players don't have a bare-fists swing
--- animation the way a zombie does), so leaving Attack at the placeholder
--- just means no attack animation plays -- same "degrade gracefully,
--- nothing errors" shape as every other animation system in this project.
+-- Idle/Walk/Run fall back to a live player's default animations if left at the
+-- placeholder. Attack has no fallback (no animation plays).
 local ZOMBIE_ANIMATIONS = {
 	Idle = "rbxassetid://115109941400360",
 	Walk = "rbxassetid://139538810972180",
 	Run = "rbxassetid://139538810972180",
 	Attack = "rbxassetid://127255091636228",
 }
-local collision_group_ready = pcall(function()
+pcall(function()
 	PhysicsService:RegisterCollisionGroup(COLLISION_GROUP)
 end)
 pcall(function()
@@ -89,11 +72,7 @@ local function Get_Zombie_Appearance()
 	end
 	return {description = Instance.new("HumanoidDescription"), equipped_items = {}}
 end
--- Fallback: borrows a real player's own walk/run/idle animation ID, used
--- only when ZOMBIE_ANIMATIONS doesn't have a real custom ID set for that
--- slot. Players' default Animate script has an "idle" folder too, same as
--- "walk"/"run", so this same fallback now also covers Idle -- there's just
--- no equivalent folder for Attack, which is why that one has no fallback.
+-- Borrows a live player's default Animate clip ID for a slot.
 local function Get_Player_Animation_Id(folder_name)
 	for _, player in ipairs(Players:GetPlayers()) do
 		local character = player.Character
@@ -112,17 +91,8 @@ local function Resolve_Animation_Id(custom_id, fallback_folder_name)
 	end
 	return Get_Player_Animation_Id(fallback_folder_name)
 end
--- Loads Idle/Walk/Run tracks, switching between them based on actual
--- movement speed — matches how Roblox's own default character animates,
--- so a fast-moving zombie visually reads as running, not moonwalking, and
--- a standing-still one now actually idles instead of holding rest pose.
--- Attack is loaded here too (same Animator, same function, so there's only
--- one place that ever needs an animator reference) but is NOT part of the
--- Running-speed switch below -- it's a one-off action pose played directly
--- from Run_Zombie_AI when a hit actually lands, the same way
--- PlayerCombat's own swing track and WildLifeManager's attack_track work,
--- not a looping locomotion state. Returned to the caller so Spawn_Zombie
--- can hand it to Run_Zombie_AI.
+-- Loads Idle/Walk/Run and switches between them by movement speed. Also loads
+-- the one-off Attack track and returns it for Run_Zombie_AI to play on hits.
 local function Setup_Zombie_Animation(zombie, humanoid)
 	local idle_id = Resolve_Animation_Id(ZOMBIE_ANIMATIONS.Idle, "idle")
 	local walk_id = Resolve_Animation_Id(ZOMBIE_ANIMATIONS.Walk, "walk")
@@ -142,12 +112,8 @@ local function Setup_Zombie_Animation(zombie, humanoid)
 		anim.AnimationId = walk_id
 		walk_track = animator:LoadAnimation(anim)
 		walk_track.Looped = true
-		-- [stated] the custom Walk clip only animates the upper body and was
-		-- meant to rely on "Roblox's default run animations" for the legs --
-		-- but these zombies never get a default Animate script, so nothing
-		-- else was ever driving the legs. Forcing this to Action priority
-		-- guarantees it wins on any joint it DOES touch (upper body) once the
-		-- player-sourced leg_walk_track below is layered in underneath it.
+		-- The custom walk only animates the upper body; Action priority lets it win
+		-- there while the borrowed default walk below drives the legs.
 		walk_track.Priority = Enum.AnimationPriority.Action
 	end
 	if run_id then
@@ -157,17 +123,8 @@ local function Setup_Zombie_Animation(zombie, humanoid)
 		run_track.Looped = true
 		run_track.Priority = Enum.AnimationPriority.Action
 	end
-	-- [stated] "basing the movement on the live player's default walk/run" --
-	-- these two tracks are loaded UNCONDITIONALLY from a live player's own
-	-- default Animate walk/run clips (bypassing Resolve_Animation_Id's
-	-- placeholder-gate on purpose) and played in parallel with the custom
-	-- walk/run tracks above. The custom clip never has leg keyframe data, so
-	-- it can't conflict with these on the leg joints -- Priority only
-	-- resolves conflicts between tracks that both touch the same joint, it
-	-- can't animate a joint a track never keyed. Where the two WOULD overlap
-	-- (upper body), the custom track's forced Action priority wins, so the
-	-- net effect is: custom clip drives the upper body, borrowed
-	-- player animation drives the legs, nothing fights over either.
+	-- Legs: a live player's default walk/run, always loaded and played alongside
+	-- the custom upper-body clip (they don't share joints).
 	local leg_walk_id = Get_Player_Animation_Id("walk")
 	local leg_run_id = Get_Player_Animation_Id("run")
 	local leg_walk_track = nil
@@ -218,10 +175,7 @@ local function Setup_Zombie_Animation(zombie, humanoid)
 		anim.AnimationId = attack_id
 		attack_track = animator:LoadAnimation(anim)
 		attack_track.Looped = false
-		-- Forced here in script rather than relying on it having been set
-		-- correctly in the Animation Editor -- guarantees the attack pose
-		-- wins over the looping Walk/Run track for as long as it's
-		-- playing, regardless of how the clip was authored.
+		-- Forced so it plays over walk/run.
 		attack_track.Priority = Enum.AnimationPriority.Action
 	end
 	return attack_track
@@ -306,9 +260,7 @@ function ZombieEvent.Run_Zombie_AI(zombie, humanoid, game_data, attack_track)
 					return
 				end
 				if closest_distance <= ZOMBIE_DIRECT_CHASE_RANGE then
-					-- Close enough that obstacle avoidance no longer
-					-- matters — walk straight at the player instead of
-					-- letting path-waypoint churn cause sidestepping.
+					-- Close enough to skip pathfinding.
 					current_waypoints = nil
 					local to_target = target_root.Position - root.Position
 					local flat_direction = Vector3.new(to_target.X, 0, to_target.Z)
@@ -365,15 +317,6 @@ function ZombieEvent.Run_Zombie_AI(zombie, humanoid, game_data, attack_track)
 			zombie:Destroy()
 		end
 	end)
-end
-local function Send_Warnings(delay_seconds)
-	for _, player in ipairs(Players:GetPlayers()) do
-		local has_upgrade = PlayerMinimap.has_upgrade(player, "Terrain")
-		local warning_time = has_upgrade and WARNING_LONG or WARNING_SHORT
-		if warning_time >= delay_seconds then
-			event_warning:FireClient(player, "Zombies", delay_seconds)
-		end
-	end
 end
 function ZombieEvent.trigger(game_data)
 	if not match_start_time then

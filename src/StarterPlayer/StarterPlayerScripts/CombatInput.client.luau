@@ -4,38 +4,20 @@ local attack_request = replicated_storage:WaitForChild("AttackRequest")
 local block_start_request = replicated_storage:WaitForChild("BlockStartRequest")
 local block_stop_request = replicated_storage:WaitForChild("BlockStopRequest")
 local dodge_request = replicated_storage:WaitForChild("DodgeRequest")
--- [stated] "Hold to charge, release to fire" bow draw -- PlayerCombat.lua
--- already has start_draw/release_draw and RequestChecker.lua already
--- wires these two remotes to them; this script is what actually fires
--- them. Needs manual creation in ReplicatedStorage, same outstanding step
--- as every other new remote this project.
+-- Bow draw: hold to charge, release to fire.
 local draw_start_request = replicated_storage:WaitForChild("DrawStartRequest")
 local draw_release_request = replicated_storage:WaitForChild("DrawReleaseRequest")
--- [stated/found] "attempt to perform arithmetic (mul) on nil and number"
--- in PlayerCombat.attack the first time MouseButton1 fired AttackRequest
--- while a bow was equipped -- a melee swing and a ranged draw are two
--- completely different server calls (attack vs. start_draw/release_draw),
--- so this script needs to know what's currently equipped to pick the
--- right one. equipment_updated already fires this exact table
--- (RequestChecker.lua's equip_request/unequip_request handlers both do
--- `equipment_updated:FireClient(player, equipped)`) -- it was just never
--- listened to here before, since melee never needed to know.
+-- Tracks the equipped weapon so a click can choose melee attack vs. bow draw.
 local equipment_updated = replicated_storage:WaitForChild("EquipmentUpdated")
 local ItemData = require(replicated_storage:WaitForChild("ItemData"))
 local camera_lock_state = require(script.Parent:WaitForChild("CameraLockState"))
--- Updated on every EquipmentUpdated -- read once per MouseButton1 press
--- to decide attack vs. draw, same "decide off current equipped state, not
--- a stored mode flag" spirit RequestChecker's own server-side gating
--- already uses for the food-vs-weapon AttackRequest branch.
 local equipped_weapon_item_name = nil
 equipment_updated.OnClientEvent:Connect(function(equipped)
 	local weapon_entry = equipped and equipped["Weapon"]
 	equipped_weapon_item_name = weapon_entry and weapon_entry.ItemName
 end)
--- Set the instant MouseButton1 goes down IF that press started a ranged
--- draw, so InputEnded knows whether its own MouseButton1 release means
--- "release_draw" -- reading equipped_weapon_item_name again at release
--- time would be wrong if the player switched weapons mid-hold.
+-- Whether this press started a draw, so the release fires release_draw even if
+-- the weapon changed mid-hold.
 local is_drawing = false
 user_input_service.InputBegan:Connect(function(input, game_processed)
 	if input.KeyCode == Enum.KeyCode.LeftAlt or input.KeyCode == Enum.KeyCode.RightAlt then

@@ -12,9 +12,7 @@ local unequip_request = replicated_storage:WaitForChild("UnequipRequest")
 local equipment_updated = replicated_storage:WaitForChild("EquipmentUpdated")
 local use_item_request = replicated_storage:WaitForChild("UseItemRequest")
 local drop_item_request = replicated_storage:WaitForChild("DropItemRequest")
--- [stated] ctrl+click dropping equipped gear — see Handle_Ctrl_Click below.
--- New RemoteEvent, needs manual creation in ReplicatedStorage (same as
--- InfectionUpdated before it).
+-- Ctrl+click drops equipped gear (see Handle_Ctrl_Click).
 local drop_equipped_request = replicated_storage:WaitForChild("DropEquippedRequest")
 local stats_updated = replicated_storage:WaitForChild("StatsUpdated")
 local stamina_updated = replicated_storage:WaitForChild("StaminaUpdated")
@@ -22,9 +20,7 @@ local weight_updated = replicated_storage:WaitForChild("WeightUpdated")
 local hunger_updated = replicated_storage:WaitForChild("HungerUpdated")
 -- Item data lookup (icons, descriptions, equip info)
 local item_data = require(replicated_storage:WaitForChild("ItemData"))
--- Camera lock state — tracks whether the inventory is genuinely open, used
--- to gate drag-start so stale click coordinates can't start a drag while
--- the panel isn't actually up.
+-- Used to only start drags while the inventory is actually open.
 local camera_lock_state = require(player_scripts:WaitForChild("CameraLockState"))
 -- Setting references to access inventory slots
 local inventory_gui = script.Parent
@@ -62,10 +58,7 @@ local health_stat_label = stats_grid:WaitForChild("HEALTH Stat")
 local stam_regen_stat_label = stats_grid:WaitForChild("STAM REGEN Stat")
 local hunger_stat_label = stats_grid:WaitForChild("HUNGER Stat")
 local str_stat_label = stats_grid:WaitForChild("STR Stat")
--- Weight display lives in a different branch of the tree than the Stats
--- panel above — Inventory.Equipment.Storage&Weight.Weight, next to the
--- gear/backpack panel rather than under Stats.StatsGrid. Bracket-indexed
--- because "Storage&Weight" has an ampersand in its instance name.
+-- Bracket-indexed because the instance name contains "&".
 local storage_weight_panel = inventory_gui.Inventory.Equipment["Storage&Weight"]
 local weight_label = storage_weight_panel:WaitForChild("Weight")
 -- How far the mouse has to move before a press+release counts as a drag
@@ -106,9 +99,7 @@ local function Get_Combined_Slots()
 	end
 	return combined
 end
--- Hotbar slots are fixed GUI objects (not cloned like grid slots), sorted
--- into number-key order. Shared by shift-click placement and the number-
--- key equip handler below, so both agree on which slot is "first"/"last".
+-- Hotbar slots in number-key order.
 local function Get_Sorted_Hotbar_Slots()
 	local slots = {}
 	for _, child in ipairs(hot_bar:GetChildren()) do
@@ -130,10 +121,8 @@ local function Show_Item_Info(item_name)
 	scan_icon.Image = data.Icon or ""
 	scan_text.Text = data.Description or ""
 end
--- Updates a slot's display: item name on the button itself, and the count
--- (if more than 1) on its ItemAmount label — instead of appending the
--- count into the button's own text. Safe to call on slots that don't have
--- an ItemAmount child at all (equipment slots, for instance).
+-- Shows the item name on the button and the count (if > 1) on ItemAmount.
+-- Safe on slots without an ItemAmount child.
 local function Set_Slot_Display(slot, item_name, amount)
 	slot.Text = item_name or ""
 	local amount_label = slot:FindFirstChild("ItemAmount")
@@ -173,11 +162,8 @@ local function Add_Scanning_Border(stroke)
 	tween:Play()
 end
 local currently_equipped = {}
--- Sums Defense across the equipped table purely from item_data, which the
--- client already has — no extra remote needed just to display ARMOR.
--- Dedupes by ItemName (not slot key) in case a future item ever spans
--- more than one EquipSlot; mirrors PlayerEquipment.get_total_defense's
--- dedup logic server-side, which is what actually gates combat damage.
+-- Display-only total Defense (counted once per item, like the server's
+-- get_total_defense).
 local function Compute_Total_Defense(equipped)
 	local total = 0
 	local counted_items = {}
@@ -213,12 +199,8 @@ local function Update_Equipment_Display(equipped)
 	armor_stat_label.Text = tostring(Compute_Total_Defense(equipped))
 end
 equipment_updated.OnClientEvent:Connect(Update_Equipment_Display)
--- Stats panel: STR/DEX/END come from the server (PlayerStats), STAMINA
--- REGEN from PlayerStamina, HEALTH is read directly off the local
--- character's own Humanoid since that's already replicated to us and
--- doesn't need a dedicated remote. HUNGER shows hunger stage +
--- time-to-next-stage, which both explains WHY regen speed is changing and
--- is more actionable (tells you when to go eat something).
+-- STR/DEX/END from PlayerStats, STAMINA REGEN from PlayerStamina, HEALTH from
+-- the local Humanoid, HUNGER from PlayerHunger.
 stats_updated.OnClientEvent:Connect(function(stats)
 	str_stat_label.Text = tostring(stats.Strength)
 	dex_stat_label.Text = tostring(stats.Dexterity)
@@ -227,11 +209,8 @@ end)
 stamina_updated.OnClientEvent:Connect(function(current, max, regen_rate)
 	stam_regen_stat_label.Text = string.format("%.1f/s", regen_rate)
 end)
--- Hunger stage + estimated seconds until it worsens (nil at Starving —
--- nothing worse to count down to). seconds_to_next is a live projection at
--- the player's CURRENT rate, so it can jump around a bit as sprinting/
--- blocking/etc. start and stop — same caveat any "time to empty" estimate
--- carries, not a bug.
+-- seconds_to_next is a projection at the current rate (nil at Starving), so it
+-- shifts as activity changes.
 hunger_updated.OnClientEvent:Connect(function(stage_name, seconds_to_next)
 	if seconds_to_next then
 		hunger_stat_label.Text = string.format("%s (%ds)", stage_name, math.ceil(seconds_to_next))
@@ -239,10 +218,7 @@ hunger_updated.OnClientEvent:Connect(function(stage_name, seconds_to_next)
 		hunger_stat_label.Text = stage_name
 	end
 end)
--- Weight panel: current/max carried weight plus the tier name (Very
--- Light/Standard/Heavy/Very Heavy/Overburdened), all computed server-side
--- by PlayerWeight and pushed here any time inventory, equipment, or a
--- Strength-boosting stat item changes.
+-- Carried/max weight and tier, pushed by PlayerWeight on any change.
 weight_updated.OnClientEvent:Connect(function(data)
 	weight_label.Text = string.format("%.1f/%.1f (%s)", data.Carried, data.Max, data.Tier)
 end)
@@ -259,19 +235,9 @@ if local_player.Character then
 	Setup_Health_Display(local_player.Character)
 end
 local_player.CharacterAdded:Connect(Setup_Health_Display)
--- [stated] "I do not want weapons or armor to be stackable in the player's
--- inventory, while stims and food would be stackable." The server-side
--- inventory (PlayerInventory.lua) is, and stays, just a plain
--- item_name -> count map — there's no per-copy identity to track (no
--- durability or other distinguishing state), so nothing there needs to
--- change. This only affects how the CLIENT renders that count: a
--- non-stackable item's count gets rendered as that many SEPARATE
--- amount-1 slots instead of one slot with a count label. Real weapons,
--- armor, and backpacks are non-stackable; food/drinks are explicitly
--- carved back OUT of "has a WeaponModel" (they share that field with real
--- weapons purely so they can occupy the hand slot, see PlayerEquipment/
--- ItemData) so they stay stackable; everything else (stims/StatBoost,
--- MinimapUpgrade) also stays stackable, matching how it already displayed.
+-- Weapons, armor and backpacks don't stack: the server just keeps a count, and
+-- the client shows that many separate slots. Food (which also has a
+-- WeaponModel so it can be held) and other consumables stack.
 local function Is_Stackable(data)
 	if data.ArmorTemplate or data.BackpackModel then
 		return false
@@ -281,14 +247,8 @@ local function Is_Stackable(data)
 	end
 	return true
 end
--- Shift-click quick actions. Armor equips immediately — the server's
--- equip_item already unequips whatever currently occupies that armor's
--- EquipSlots before attaching the new piece, so this is literally the
--- same equip_request the drag-onto-equipment-slot flow already fires,
--- just skipping the drag. Everything else (per current design, that's
--- every non-armor item) drops into the first open hotbar slot, or swaps
--- into the last hotbar slot — trading places with whatever was there —
--- if the hotbar's already full.
+-- Shift-click: armor equips immediately; anything else goes to the first empty
+-- hotbar slot, or swaps into the last one if the hotbar is full.
 local function Get_First_Empty_Hotbar_Slot()
 	for _, slot in ipairs(Get_Sorted_Hotbar_Slots()) do
 		if not slot:GetAttribute("ItemName") then
@@ -297,10 +257,8 @@ local function Get_First_Empty_Hotbar_Slot()
 	end
 	return nil
 end
--- Finds an existing grid slot for item_name, if any — used when moving a
--- STACKABLE item back out of the hotbar (see Handle_Shift_Click below) so
--- it merges into an existing pile instead of creating a redundant second
--- slot for the same item.
+-- Existing grid slot for item_name, so stackables merge when returning from
+-- the hotbar.
 local function Find_Grid_Slot(item_name)
 	for _, child in ipairs(grid_area:GetChildren()) do
 		if child ~= inventory_slot_template and child.Name == item_name then
@@ -338,17 +296,7 @@ local function Move_Item_To_Hotbar(source_slot, item_name, amount)
 		Set_Slot_Display(source_slot, "", nil)
 	end
 end
--- [stated/found] shift-clicking an equipped armor piece, or an item already
--- sitting in the hotbar, used to be flat no-ops ("nothing to shift-click
--- into" / "already in the hotbar") — [stated] "shift clicking items in the
--- hotbar or equipped armor does not auto put them back in the inventory
--- and I want it to." This is also almost certainly why [stated] separately
--- saw a weapon model stay welded to the hand after "unequipping" it: if
--- shift-click was the only unequip gesture being tried and it was actually
--- a no-op, no UnequipRequest ever fired, so PlayerEquipment never got a
--- chance to destroy that weapon's attached piece server-side (the drag-off
--- and number-key-toggle unequip paths already worked correctly — this
--- fills in the missing third one).
+-- Shift-click on equipped armor or a hotbar item sends it back to the inventory.
 local function Handle_Shift_Click(slot)
 	local item_name = slot:GetAttribute("ItemName")
 	if not item_name then
@@ -359,9 +307,7 @@ local function Handle_Shift_Click(slot)
 		return
 	end
 	if slot.Parent == equipment_grid then
-		-- unequip_item already refunds 1 to inventory server-side, and the
-		-- resulting equipment_updated/inventory_updated pushes redraw both
-		-- panels — nothing else to do locally here.
+		-- The server refunds the item and pushes updates that redraw both panels.
 		local slot_name = GUI_NAME_TO_SLOT[slot.Name] or slot.Name
 		unequip_request:FireServer(slot_name)
 		return
@@ -371,25 +317,13 @@ local function Handle_Shift_Click(slot)
 		return
 	end
 	if data.StatBoost or data.MinimapUpgrade or data.Food then
-		-- Consumables (stat-boost crate items, minimap upgrades, and now
-		-- food/drink) — usable from anywhere, including the hotbar, unlike
-		-- the hotbar-move path below which is a no-op once something's
-		-- already there. Food is ALSO reachable by selecting it off the
-		-- hotbar (equips into the Weapon hand-slot) then left-clicking —
-		-- this is the instant-eat shortcut, same as the other two.
+		-- Consumables can be used from anywhere, including the hotbar.
 		use_item_request:FireServer(item_name)
 		return
 	end
 	if slot.Parent == hot_bar then
-		-- Sending a hotbar item back to the inventory. If it's the item
-		-- currently equipped in the Weapon slot (selected via number key),
-		-- unequip it server-side first — that refunds 1 to inventory, so the
-		-- next inventory_updated push naturally shows it in the grid, same
-		-- as the equipment_grid branch above. Otherwise there's no server
-		-- state to change (Move_Item_To_Hotbar never told the server
-		-- anything either), so this just mirrors it back into the grid
-		-- locally — merging into an existing pile if the item's stackable,
-		-- or always adding a fresh slot if it's not (see Is_Stackable).
+		-- Back to the inventory: unequip first if it's the held weapon; otherwise this
+		-- is client-only, so mirror it back into the grid locally (merging if stackable).
 		local amount = slot:GetAttribute("Amount") or 1
 		if currently_equipped["Weapon"] == item_name then
 			unequip_request:FireServer("Weapon")
@@ -415,17 +349,8 @@ local function Handle_Shift_Click(slot)
 	local amount = slot:GetAttribute("Amount") or 1
 	Move_Item_To_Hotbar(slot, item_name, amount)
 end
--- Fires the server drop for exactly what's sitting in THIS slot (not the
--- item's total owned amount — see DroppedItems.drop_item's own comment for
--- why that used to be wrong), then clears LOCAL state so the UI doesn't
--- keep showing an item the server just threw away. Grid slots always
--- represent exactly what's currently owned there, so they just get
--- destroyed; hotbar slots are hand-managed client state (see
--- Move_Item_To_Hotbar's own comment above) so their attributes need
--- clearing by hand, the same way an emptied hotbar slot already is
--- elsewhere in this file. [stated/found] this cleanup was missing before —
--- shift+right-clicking a hotbar item dropped it server-side but left the
--- slot showing a phantom item you could still try (and fail) to equip.
+-- Drops exactly what's in this slot, then clears the slot locally (hotbar slots
+-- are client state and need clearing by hand).
 local function Drop_Slot_Contents(slot, item_name)
 	local amount = slot:GetAttribute("Amount") or 1
 	drop_item_request:FireServer(item_name, amount)
@@ -437,9 +362,8 @@ local function Drop_Slot_Contents(slot, item_name)
 		Set_Slot_Display(slot, "", nil)
 	end
 end
--- Shift+right-click drops this slot's contents to the ground — equipped
--- items are excluded the same way Handle_Shift_Click excludes them; drag
--- them off onto the world instead (see InputEnded) to shed worn gear.
+-- Shift+right-click drops a slot's contents. Equipped items are excluded
+-- (use ctrl+click).
 local function Handle_Shift_Right_Click(slot)
 	if slot.Parent == equipment_grid then
 		return
@@ -450,16 +374,8 @@ local function Handle_Shift_Right_Click(slot)
 	end
 	Drop_Slot_Contents(slot, item_name)
 end
--- [stated] "ctrl + left clicking items in a players hotbar/equipped
--- armor/inventory to drop that item/stack of items" — same drop behavior
--- as shift+right-click above, EXTENDED to also cover equipped gear (which
--- shift+right-click deliberately still excludes, per its own comment).
--- Dropping something currently equipped needs an unequip first (dropping
--- checks the player's OWN inventory, and an equipped item isn't sitting
--- there) — routed through a dedicated DropEquippedRequest so the unequip
--- and the drop happen as one atomic server step, rather than this script
--- firing UnequipRequest then DropItemRequest back to back and hoping
--- they're processed in that order.
+-- Ctrl+click drops an item or stack, including equipped gear. Equipped items use
+-- DropEquippedRequest so the unequip and drop happen in one server step.
 local function Handle_Ctrl_Click(slot)
 	local item_name = slot:GetAttribute("ItemName")
 	if not item_name then
@@ -474,9 +390,6 @@ local function Handle_Ctrl_Click(slot)
 end
 user_input_service.InputBegan:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		-- Gate drag-start on the inventory actually being open — this is
-		-- what stops precise-but-stale coordinate clicks from starting a
-		-- drag while the panel isn't genuinely visible/interactable.
 		if not camera_lock_state.gui_open then
 			return
 		end
@@ -512,11 +425,7 @@ user_input_service.InputBegan:Connect(function(input)
 			end
 		end
 	elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
-		-- Same open-panel gate as the MouseButton1 branch above, plus
-		-- requiring shift so a bare right-click still falls through to
-		-- CombatInput's block bind whenever the panel is closed (that
-		-- script already no-ops while gui_open is true, so there's no
-		-- conflict either way).
+		-- Needs shift, so a plain right-click still blocks when the panel is closed.
 		if not camera_lock_state.gui_open then
 			return
 		end
@@ -609,14 +518,7 @@ user_input_service.InputEnded:Connect(function(input)
 			end
 		end
 	elseif not slot_matched and not Where_Is_Mouse(inventory_gui.Inventory, mouse_position) then
-		-- Released outside the whole inventory panel (not just outside a
-		-- slot, and not just outside the backpack grid) -> drop just THIS
-		-- slot's amount to the ground instead of snapping back to its old
-		-- slot. [stated/found] this used to drop the item's entire owned
-		-- amount regardless of what was actually dragged out — dragging one
-		-- of two separate (now non-stackable) weapons out was taking both.
-		-- dragged_item_amount was already being captured at drag-start for
-		-- display purposes; it just wasn't being passed along here.
+		-- Released outside the inventory panel: drop just this slot's amount.
 		drop_item_request:FireServer(dragged_item_name, dragged_item_amount)
 		if dragged_item then
 			if dragged_item.Parent == grid_area then
@@ -640,10 +542,7 @@ user_input_service.InputChanged:Connect(function(input)
 		dragged_clone.Position = UDim2.fromOffset(input.Position.X, input.Position.Y)
 	end
 end)
--- Number-key hotbar equip: pressing 1-9 (0 for a 10th slot) equips
--- whatever item currently occupies that hotbar slot, using the same
--- equip_request the drag-drop system already fires. Works regardless of
--- whether the inventory GUI is currently open.
+-- Number keys 1-9 (and 0) equip the item in that hotbar slot, panel open or not.
 local HOTBAR_KEYCODES = {
 	Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four,
 	Enum.KeyCode.Five, Enum.KeyCode.Six, Enum.KeyCode.Seven, Enum.KeyCode.Eight,
@@ -677,18 +576,8 @@ user_input_service.InputBegan:Connect(function(input, game_processed)
 		end
 	end
 end)
--- [stated/found] items shift-clicked/dragged into the hotbar were showing
--- up a SECOND time in the backpack grid too. Root cause: Move_Item_To_Hotbar
--- is purely a client-side visual placement — it never tells the server
--- anything, since the server's inventory count for that item never actually
--- changes (the item is still owned, just displayed in a different slot).
--- Update_Inventory didn't know that, though: it blindly re-rendered a fresh
--- grid slot for the item's FULL server-side amount every time ANY inventory
--- change pushed a refresh (picking up something unrelated, consuming
--- something else, etc.), even though some of that amount was already
--- sitting in a hotbar slot. Fixed by subtracting whatever's currently
--- committed to the hotbar before deciding what (if anything) to render in
--- the grid.
+-- Hotbar placement is client-only (the server count doesn't change), so
+-- subtract hotbar amounts before rendering the grid to avoid showing items twice.
 local function Get_Hotbar_Committed_Amounts()
 	local committed = {}
 	for _, slot in ipairs(hot_bar:GetChildren()) do
@@ -698,20 +587,8 @@ local function Get_Hotbar_Committed_Amounts()
 			committed[item_name] = (committed[item_name] or 0) + amount
 		end
 	end
-	-- [stated/found] "equip one of two separate Maces -> the OTHER one
-	-- disappears from the inventory grid, reappears after unequipping."
-	-- Root cause: equipping (or selecting food to eat) removes exactly ONE
-	-- unit from the SERVER's inventory count (PlayerEquipment.equip_item's
-	-- PlayerInventory.remove_item(player, item_name, 1)) — that unit is
-	-- genuinely gone from the server count already, not merely "reserved"
-	-- the way an unequipped hotbar item still is. But the hotbar slot's
-	-- local Amount attribute above doesn't know that and keeps counting it
-	-- too, so it was getting subtracted a SECOND time on top of the
-	-- server's already-reduced count — hiding a second, separate,
-	-- non-equipped copy of the same item that should still be showing in
-	-- the grid. Fixed by crediting back exactly 1 for whichever item is
-	-- currently equipped in the Weapon slot, since that's the one unit the
-	-- server-side count has already accounted for.
+	-- The equipped weapon was already removed from the server count, but its hotbar
+	-- slot still counts it, so credit 1 back to avoid hiding a second copy.
 	local equipped_item = currently_equipped["Weapon"]
 	if equipped_item and committed[equipped_item] then
 		committed[equipped_item] = math.max(0, committed[equipped_item] - 1)
@@ -726,8 +603,7 @@ local function Update_Inventory(inventory)
 		if remaining > 0 then
 			local data = item_data[item_name]
 			if data and not Is_Stackable(data) then
-				-- [stated] weapons/armor never stack -- each copy the server
-				-- count says the player owns gets its own separate slot.
+				-- Non-stackable: one slot per copy.
 				for _ = 1, remaining do
 					Create_Inventory_Slot(item_name, 1)
 				end

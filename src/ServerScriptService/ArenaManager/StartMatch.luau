@@ -5,59 +5,26 @@ local server_script_service = game:GetService("ServerScriptService")
 local lighting = game:GetService("Lighting")
 local players = game:GetService("Players")
 local collection_service = game:GetService("CollectionService")
--- [stated] "is it possible to remove all plants that's touching the
--- replaced terrain?" / "add these boulders to the models that get changed
--- when near the flames" -- ForestFireEvent.lua needs tags to find plants/
--- rocks the same way it already finds trees via LIVE_TREE_TAG, read by its
--- own LIVE_PLANT_TAG/LIVE_ROCK_TAG constants (keep both in sync if these
--- ever change). Declared at file scope rather than inside Generate() --
--- Generate() is already right at Luau's 200-local-per-function ceiling, so
--- adding these as locals INSIDE it (which is where they lived originally)
--- tips it over into a real compile error; as upvalues captured from here
--- instead, they don't count against that limit.
+-- Tags ForestFireEvent uses to find plants/rocks (keep its constants in sync).
+-- Declared at file scope because Generate() is at Luau's 200-local limit.
 local LIVE_PLANT_TAG = "LivePlant"
 local LIVE_ROCK_TAG = "LiveRock"
-local current_players = players:GetPlayers()
 local arena_manager = script.Parent
 local nature_folder = server_storage:WaitForChild("Nature")
 local crate_loot = require(arena_manager:WaitForChild("CrateLoot"))
 local minimap_data = require(arena_manager:WaitForChild("MinimapData"))
 local settlement_data = require(arena_manager:WaitForChild("SettlementData"))
 local wildlife = require(arena_manager:WaitForChild("WildLifeManager"))
--- [stated] "implement a day/night cycle, along with a randomized weather
--- cycle" -- a ModuleScript sibling of this one under ArenaManager, same
--- require convention as WildLifeManager above. Needs to actually be
--- placed there in Studio, same outstanding manual step every new module/
--- remote in this project has needed.
 local day_night_weather = require(arena_manager:WaitForChild("DayNightWeather"))
 local dropped_items = require(server_script_service:WaitForChild("DroppedItems"))
--- [stated] berries foraged from a bush go straight into the player's
--- inventory (PlayerInventory.add_item(player, item_name, amount)) rather
--- than dropping as a ground pickup like crate/floor loot does.
 local player_inventory = require(server_script_service:WaitForChild("PlayerInventory"))
--- [found] RequestChecker.lua also calls PlayerWeight.notify(player) after
--- every single inventory grant (berries carry Weight=0.5 in ItemData) --
--- without it, carried weight would silently go stale until some other,
--- unrelated action happened to refresh it.
 local player_weight = require(server_script_service:WaitForChild("PlayerWeight"))
--- FloorLootData lives under ArenaManager (a sibling of CrateLoot/StartMatch
--- itself), not ReplicatedStorage like CrateData — matches where it's
--- actually placed in Studio, not the CrateData convention.
 local floor_loot_data = require(arena_manager:WaitForChild("FloorLootData"))
 local match_ui_event = replicated_storage:WaitForChild("MatchUIEvent")
 local match_start = replicated_storage:WaitForChild("MatchStarted")
--- [found] RequestChecker.lua fires this after every single PlayerInventory
--- mutation (equip/unequip, crate takes, use-item, drops) -- it's what the
--- inventory UI actually listens to for refreshing, and PlayerInventory.lua
--- itself never fires it. Forage needs the same follow-up fire or the grant
--- lands in the data table but never reaches the player's screen.
 local inventory_updated = replicated_storage:WaitForChild("InventoryUpdated")
 function StartMatch.Generate(game_data)
-	-- All the individual nature-model references used to be their own
-	-- locals (tree_model1, bush_model1, rock_model_dark, etc.) -- grouped
-	-- into one table so this whole section only costs 1 local against
-	-- Generate's 200-local cap instead of ~19. tree_model5 (DeadTree) was
-	-- never referenced anywhere else, so it's dropped rather than ported.
+	-- Grouped into one table to save locals (Generate() is at the 200-local limit).
 	local NATURE_MODELS = {
 		tree_alpine = nature_folder:WaitForChild("Trees"):WaitForChild("AlpineTree"),
 		tree_birch = nature_folder:WaitForChild("Trees"):WaitForChild("Birch Tree"),
@@ -98,9 +65,7 @@ function StartMatch.Generate(game_data)
 	local apartment_4f = buildings_folder:WaitForChild("4 Floor Apartment")
 	local unfinished_structure = buildings_folder:WaitForChild("Unfinished Structure")
 	local abandoned_shop = buildings_folder:WaitForChild("Abandoned Shop")
-	-- [stated] unfinished_structure doesn't line roads -- left out of
-	-- road_building_list here regardless of whatever the next interior-
-	-- fill design ends up looking like.
+	-- Unfinished structures don't line roads.
 	local road_building_list = {apartment_2f, apartment_4f, abandoned_shop}
 	local brickwork_house = buildings_folder:WaitForChild("Brickwork House")
 	local deroofed_house = buildings_folder:WaitForChild("De-Roofed House")
@@ -108,79 +73,31 @@ function StartMatch.Generate(game_data)
 	local scatter_house_list = {brickwork_house, deroofed_house, mattress_house}
 	local warehouse_template = buildings_folder:WaitForChild("Warehouse")
 	local warehouse_list = {warehouse_template}
-	-- [stated] "utilize the large garbage bins as a replacement if using a
-	-- smaller building doesn't work" -- its own single-model list, kept
-	-- separate the same way warehouse_list is, so it never lines roads and
-	-- never competes as a normal fill/fallback pick -- it was only ever
-	-- placed by the (now wiped) dead-slot clustering pass, kept around
-	-- as a candidate for whatever decor approach the new design uses.
+	-- Fallback decor; kept out of the road and fill lists.
 	local large_garbage_bin = buildings_folder:WaitForChild("Large Garbage Bin")
 	local garbage_bin_list = {large_garbage_bin}
-	-- [stated] "I've added multiple rubble piles/trash piles that I
-	-- want to add to the empty slots that didn't get filled with
-	-- buildings" -- GetChildren() rather than naming each one by hand
-	-- like every other building list here, since this is explicitly an
-	-- open-ended pile the user will keep adding more pieces to -- any
-	-- model dropped into this folder is automatically in rotation with
-	-- no script change needed.
+	-- Every model in this folder is in rotation automatically.
 	local rubble_folder = buildings_folder:WaitForChild("Rubble/Garbage")
 	local rubble_list = rubble_folder:GetChildren()
-	-- [stated] "remove both rubble piles from the spawn pool for the
-	-- villages" -- Rubble1/Rubble2 (the two pieces RUBBLE_GROUND_
-	-- CORRECTION_BY_NAME below already singles out by name) stay in the
-	-- city's rubble_list untouched; villages get this filtered copy
-	-- instead, built once here rather than re-filtered on every village.
+	-- Villages use the rubble list minus Rubble1/Rubble2.
 	local village_rubble_list = {}
 	for _, model in ipairs(rubble_list) do
 		if model.Name ~= "Rubble1" and model.Name ~= "Rubble2" then
 			table.insert(village_rubble_list, model)
 		end
 	end
-	-- [stated] "I've got a prop folder within the buildings folder which
-	-- has props I would want to place randomly throughout the multiple
-	-- levels of the unfinished structure... would this be a similar case
-	-- to the lootfloorareas... several invisible areas where I would want
-	-- props spawned" -- same open-ended-folder convention as rubble_list
-	-- above (GetChildren() once here, so anything dropped into Props
-	-- later is automatically in rotation), grouped with the roll-count
-	-- into one table -- same 1-local consolidation as every other
-	-- per-feature table in this file, since Generate is already right up
-	-- against the 200-local ceiling. Used inside Populate_Building below,
-	-- keyed off PropSpawnArea markers the same way it already keys off
-	-- LootFloorArea markers for floor loot. Not Unfinished-Structure-
-	-- specific -- any building with PropSpawnArea markers picks this up.
+	-- Random props placed on PropSpawnArea markers in any building (see
+	-- Populate_Building). Every model in the Props folder is in rotation.
 	local PROP_SCATTER = {
 		pool = buildings_folder:WaitForChild("Props"):GetChildren(),
-		-- [stated] "increase the rate that props spawn" -- raised from 1-3
-		-- to 2-5 per area. Still a placeholder, tune further if this
-		-- still isn't enough.
 		min = 10,
 		max = 15,
 	}
-	-- [stated] "add the warehouse to the building placement list for
-	-- cities, but still don't make it something to line roads" -- kept
-	-- separate from road_building_list so it never lines a road frontage
-	-- regardless of how the next interior-fill approach picks from it.
-	-- fill_building_list/combined_scatter_list below are both currently
-	-- unused leftovers from earlier placement systems -- kept defined
-	-- (and measured into BUILDING_METRICS/RUBBLE_METRICS further down)
-	-- in case the new design wants them, rather than re-derived later.
-	local fill_building_list = {apartment_2f, apartment_4f, abandoned_shop, warehouse_template}
-	local combined_scatter_list = {}
-	for _, m in ipairs(scatter_house_list) do
-		table.insert(combined_scatter_list, m)
-		table.insert(combined_scatter_list, m)
-	end
-	for _, m in ipairs(warehouse_list) do
-		table.insert(combined_scatter_list, m)
-	end
 	local BUILDING_FACING_CORRECTION = {
 		[apartment_4f] = math.rad(180),
-		-- [stated] "rotate all warehouses by 90 degrees for spawning"
 		[warehouse_template] = math.rad(90),
 	}
 	local BUILDING_GROUND_CORRECTION = {
-		-- [stated] "lower the unfinished structure spawn by 1"
 		[unfinished_structure] = -44,
 		[apartment_2f] = -2,
 		[apartment_4f] = 0,
@@ -189,19 +106,12 @@ function StartMatch.Generate(game_data)
 		[mattress_house] = 1.5,
 		[abandoned_shop] = 0
 	}
-	-- Both apartment models felt too big -- shrunk uniformly via
-	-- Model:ScaleTo, applied in Place_House before positioning so the scale
-	-- is consistent everywhere apartment_2f/apartment_4f appear. Placeholder
-	-- factors, tune to taste -- anything not listed here defaults to 1.
+	-- Uniform scale per model, applied before positioning. Unlisted models = 1.
 	local MODEL_SCALE = {
 		[apartment_2f] = 0.75,
 		[apartment_4f] = 0.75,
 	}
-	-- Branches on Instance type: Model:GetBoundingBox() handles anything
-	-- inside a Model, but a bare MeshPart/Part (some Rubble/Garbage pieces
-	-- have no Model wrapper) has no GetBoundingBox -- ExtentsCFrame/
-	-- ExtentsSize is the BasePart equivalent, an axis-aligned world-space
-	-- bounding box for just that one part.
+	-- Models use GetBoundingBox; bare parts (some rubble) use ExtentsCFrame/Size.
 	local function Measure_Building(model)
 		local bounds_cframe, size
 		if model:IsA("Model") then
@@ -214,16 +124,8 @@ function StartMatch.Generate(game_data)
 		local pivot_to_bottom = pivot.Position.Y - bottom_y
 		local length = math.max(size.X, size.Z)
 		local depth = math.min(size.X, size.Z)
-		-- The SAT collision check assumes a building's long side runs along
-		-- its own local/world X at zero rotation ("length axis =
-		-- (cos(rotation), sin(rotation))"). A template modeled with its long
-		-- side along Z instead would silently swap which direction gets the
-		-- generous half_length reach and which gets the tighter half_depth.
-		-- footprint_offset rotates the COLLISION-only footprint by 90
-		-- degrees to correct for that, for any model where size.Z > size.X --
-		-- the model's actual VISUAL rotation (facing_correction) is
-		-- untouched. Applied at every Building_Too_Close/Record_Building
-		-- call site.
+		-- The collision check assumes a building's long side is its local X. For models
+		-- whose long side is Z, rotate the collision footprint (not the visual) 90 degrees.
 		local footprint_offset = (size.Z > size.X) and math.rad(90) or 0
 		return {pivot_to_bottom = pivot_to_bottom, length = length, depth = depth, footprint_offset = footprint_offset}
 	end
@@ -232,32 +134,14 @@ function StartMatch.Generate(game_data)
 	for _, model in ipairs(scatter_house_list) do BUILDING_METRICS[model] = Measure_Building(model) end
 	for _, model in ipairs(warehouse_list) do BUILDING_METRICS[model] = Measure_Building(model) end
 	for _, model in ipairs(garbage_bin_list) do BUILDING_METRICS[model] = Measure_Building(model) end
-	-- unfinished_structure isn't in any of the lists measured above (it
-	-- doesn't line roads and was historically left out of selection pools
-	-- entirely) -- measured explicitly here so it always has real metrics
-	-- ready, regardless of what pool(s) the next placement design ends up
-	-- drawing it from.
+	-- Measured separately: it isn't in any of the lists above.
 	BUILDING_METRICS[unfinished_structure] = Measure_Building(unfinished_structure)
-	-- [removed] BUILDING_METRICS_BY_NAME and longest_building_length used
-	-- to live here -- both only ever served the old raycast-based interior
-	-- row system (resolving a raycast hit back to its metrics by name, and
-	-- sizing a road-crossing search against the biggest building in
-	-- storage). Neither is read by anything in the current rectangle-vs-
-	-- rectangle placement system, so both were dropped rather than kept
-	-- as unused scaffolding.
 	local RUBBLE_METRICS = {}
 	for _, model in ipairs(rubble_list) do RUBBLE_METRICS[model] = Measure_Building(model) end
-	-- RUBBLE_FACING_CORRECTION_BY_NAME only spins pieces around the
-	-- vertical/Y axis (yaw) -- it can't fix a piece lying tilted on its
-	-- side, which needs rotation around a horizontal axis instead (see
-	-- RUBBLE_TILT_CORRECTION_BY_NAME below). rubble_list is auto-populated
-	-- from GetChildren() rather than named one by one, so these corrections
-	-- are keyed by Name instead of by model instance.
+	-- Yaw-only corrections, keyed by Name because rubble_list comes from GetChildren().
 	local RUBBLE_FACING_CORRECTION_BY_NAME = {}
-	-- CFrame.Angles(math.rad(90), 0, 0) tilts a model 90 degrees around its
-	-- own local X axis (same convention as DroppedItems.lua's WEAPON_FLAT_
-	-- ROTATION). If a piece tips onto an edge instead of lying flat, swap
-	-- the rotation to the Z axis instead: CFrame.Angles(0, 0, math.rad(90)).
+	-- Tilts a piece lying on its side. If it tips onto an edge instead, use the Z
+	-- axis: CFrame.Angles(0, 0, math.rad(90)).
 	local RUBBLE_TILT_CORRECTION_BY_NAME = {
 		Trashpile2 = CFrame.Angles(math.rad(90), 0, 0),
 	}
@@ -281,26 +165,9 @@ function StartMatch.Generate(game_data)
 			RUBBLE_GROUND_CORRECTION[model] = RUBBLE_GROUND_CORRECTION_BY_NAME[model.Name]
 		end
 	end
-	-- [stated] kept for whenever scatter_house_list goes back into rotation
-	-- (see combined_scatter_list note above) — nothing currently reads this.
-	local max_scatter_building_half_length = 0
-	for _, model in ipairs(scatter_house_list) do
-		max_scatter_building_half_length = math.max(max_scatter_building_half_length, BUILDING_METRICS[model].length / 2)
-	end
-	for _, model in ipairs(warehouse_list) do
-		max_scatter_building_half_length = math.max(max_scatter_building_half_length, BUILDING_METRICS[model].length / 2)
-	end
 	local ground_sink_buffer = 1.5
-	-- Resets Lighting every match (the whole map rebuilds from scratch
-	-- anyway) so results don't depend on whatever got left tweaked in
-	-- Studio. Ambient/OutdoorAmbient set the floor on how dark a shadowed
-	-- surface can get; ClockTime near midday keeps shadows short and soft.
-	-- Placeholder values, tune to taste.
-	-- lighting.Technology can't be set here -- Roblox refuses that write
-	-- from a runtime script ("lacking capability RobloxScript") and would
-	-- error out of this whole function. Set it once by hand in Studio's
-	-- Lighting properties instead (ShadowMap reads cleaner than Voxel on
-	-- large flat surfaces like these buildings).
+	-- Resets Lighting each match. Placeholder values.
+	-- Lighting.Technology can't be set from a script -- set it in Studio (ShadowMap).
 	local function Configure_Lighting()
 		lighting.GlobalShadows = true
 		lighting.Ambient = Color3.fromRGB(90, 90, 90)
@@ -308,9 +175,6 @@ function StartMatch.Generate(game_data)
 		lighting.ClockTime = 14
 	end
 	Configure_Lighting()
-	-- [stated] day/night + weather cycle -- stop()'s own doc comment in
-	-- DayNightWeather.lua covers why this always stops the previous
-	-- match's loop before starting a new one rather than just starting.
 	day_night_weather.start()
 	local terrain = workspace.Terrain
 	terrain:Clear()
@@ -325,63 +189,36 @@ function StartMatch.Generate(game_data)
 	local wall_flats_height = 8
 	local clear_wall_distance = 50
 	local water_level = -18
-	local height_scale = 60
 	local forest_floor = {Enum.Material.Ground, Enum.Material.Mud, Enum.Material.LeafyGrass, Enum.Material.Grass}
 	local water_floor = {Enum.Material.Mud, Enum.Material.Rock, Enum.Material.Sand}
 	local mounty_floor = {Enum.Material.Rock, Enum.Material.Slate}
 	local field_floor = {Enum.Material.Grass, Enum.Material.Grass, Enum.Material.Grass, Enum.Material.LeafyGrass}
 	local settlement_floor = {Enum.Material.Ground, Enum.Material.Concrete, Enum.Material.Concrete, Enum.Material.Concrete,
 		Enum.Material.Ground, Enum.Material.Mud, Enum.Material.Concrete}
-	-- [stated] "ground should be mainly dirt, with some mud and a little
-	-- concrete as well" -- the small villages' own weighting (5 Ground :
-	-- 2 Mud : 1 Concrete), separate from the city's concrete-heavy one.
+	-- Villages: mostly dirt, some mud, a little concrete.
 	local village_floor = {Enum.Material.Ground, Enum.Material.Ground, Enum.Material.Ground, Enum.Material.Ground,
 		Enum.Material.Ground, Enum.Material.Mud, Enum.Material.Mud, Enum.Material.Concrete}
 	local seed_x = math.random(-100000, 100000)
 	local seed_z = math.random(-100000, 100000)
 	local chunk_count = 0
-	local nature_list = {AlpineTree = true, DeadBush = true, DeadTree = true, ForestFern = true}
-	-- [stated] "forest fire event... random tree trunks falling near
-	-- players" / "rather than 1 point of origin make it 3 points" --
-	-- reservoir-sampled (Algorithm R, k=3) during the tree spawn branch
-	-- below so exactly 3 DISTINCT trees (chosen uniformly across however
-	-- many end up spawning this match) become the fire's origins, with no
-	-- need to track every tree placed or know the total count in advance.
-	-- tag is read by ForestFireEvent.lua's own LIVE_TREE_TAG constant --
-	-- keep both in sync if this ever changes.
+	-- Forest fire origins: 3 distinct trees picked uniformly by reservoir sampling
+	-- as trees spawn. tag must match ForestFireEvent's LIVE_TREE_TAG.
 	local FOREST_FIRE = {trees_seen = 0, origin_trees = {}, origin_count = 3, tag = "LiveTree"}
 	local placed_houses = {}
 	local placed_building_footprints = {}
 	local settlement_zones = {}
 	local settlement_near_padding = 15
-	-- How far PAST zone.flat_radius (the radius building placement itself
-	-- is meant to use) the terrain is held fully flat, in world studs --
-	-- so a building sitting right at that boundary can still have its
-	-- outer half overshoot onto solid flat ground instead of already-
-	-- blending natural (sloped) terrain. Placeholder, re-tune once the
-	-- new placement design knows how close to the edge buildings land.
+	-- How far past zone.flat_radius the terrain stays flat (studs), so buildings at
+	-- the edge still sit on flat ground.
 	local SETTLEMENT_FLAT_TERRAIN_PADDING = 60
-	-- [stated] "how much clear buffer should be required between any two
-	-- settlement zones" -- replaces the old flat min_distance_between_
-	-- settlements constant (300 blocks, sized only for two similarly-
-	-- huge cities) with a buffer ON TOP OF each zone's own radius, so it
-	-- scales correctly between a city (radius ~100-150 blocks) and a
-	-- village (radius ~5-8 blocks) instead of either letting villages
-	-- spawn far closer to a city's blend ring than intended, or (if sized
-	-- for villages) barely separating two cities at all.
+	-- Clear gap required between settlement zones, added on top of each zone's
+	-- radius so it works for both cities and villages.
 	local SETTLEMENT_SEPARATION_BUFFER = 20
 	local target_settlement_count = 2
 	local settlement_attempts = 0
 	local max_attempts = 100
-	-- [stated] "add 5-6 smaller settlements... located in the plains
-	-- biomes... shouldn't be more than 70 studs in diameter" -- flat_
-	-- radius/radius are in BLOCKS like every other zone field (×block_
-	-- size for studs), so a 70-stud diameter caps flat_radius at ~5.8
-	-- blocks; kept a bit under that for margin. radius adds a small
-	-- blend ring on top, nowhere near a city's +25-50 block one -- a
-	-- village this size doesn't need a long gradual transition.
-	-- Grouped into one table so this whole village-sizing/attempt-budget
-	-- set only costs 1 local against Generate's 200-local cap instead of 7.
+	-- Small plains villages, max ~70 studs across. Sizes are in blocks (x block_size
+	-- for studs).
 	local VILLAGE_ZONE = {
 		flat_radius_min = 15,
 		flat_radius_max = 30,
@@ -393,16 +230,12 @@ function StartMatch.Generate(game_data)
 	}
 	local min_crate_distance = 12
 	local crate_spawn_chance = 0.35
-	-- LootFloorArea marker scatter (see Populate_Building) — short/local
-	-- raycast so it stays on whichever floor the marker sits on rather than
-	-- punching up into the roof or down through a lower floor.
+	-- Short raycast for LootFloorArea scatter so items land on the marker's floor,
+	-- not the roof or the floor below.
 	local FLOOR_LOOT_RAY_CLEARANCE = 5
 	local FLOOR_LOOT_RAY_DISTANCE = 20
-	-- Weighted rarity roll for regular building-loot crates — must match
-	-- keys in CrateData.lua. Deliberately skewed toward Standard so
-	-- Advanced/Elite gear feels earned; SupplyDropEvent's beacon crate is
-	-- separately guaranteed Elite regardless of this table, since it's
-	-- meant to be the special one.
+	-- Rarity weights for building crates (keys must match CrateData). Supply-drop
+	-- beacon crates are always Elite.
 	local CRATE_RARITY_WEIGHTS = {
 		{Rarity = "Standard", Weight = 70},
 		{Rarity = "Advanced", Weight = 25},
@@ -478,9 +311,6 @@ function StartMatch.Generate(game_data)
 	for _, model in ipairs(bush_list) do GROUND_OFFSET[model] = Get_Base_Ground_Offset(model) end
 	for _, model in ipairs(water_plant_list) do GROUND_OFFSET[model] = Get_Base_Ground_Offset(model) end
 	for _, model in ipairs(mulchfood_list) do GROUND_OFFSET[model] = Get_Base_Ground_Offset(model) end
-	-- Props get the same automatic bounding-box ground offset as every
-	-- other scattered decoration here -- no per-model tuning table needed
-	-- as long as a prop's pivot sits roughly centered in its own bounds.
 	for _, model in ipairs(PROP_SCATTER.pool) do GROUND_OFFSET[model] = Get_Base_Ground_Offset(model) end
 	local function Flat_Distance(a, b)
 		return (Vector2.new(a.X, a.Z) - Vector2.new(b.X, b.Z)).Magnitude
@@ -491,9 +321,7 @@ function StartMatch.Generate(game_data)
 			list[i], list[j] = list[j], list[i]
 		end
 	end
-	-- Counts entries in a dictionary-style table (keyed by non-sequential
-	-- values, e.g. Player objects) — the # operator only works on plain
-	-- 1-indexed arrays, so a real dictionary needs this instead.
+	-- Counts a dictionary's entries (# only works on arrays).
 	local function Count_Table(t)
 		local count = 0
 		for _ in pairs(t) do
@@ -509,21 +337,11 @@ function StartMatch.Generate(game_data)
 		end
 		return false
 	end
-	-- Full rectangle-vs-rectangle separating-axis test: both the candidate
-	-- and every already-placed footprint are treated as oriented rectangles
-	-- (half_length along their own rotation, half_depth perpendicular), so
-	-- the check only clears a spot once there's real clearance between the
-	-- two true footprints, plus COLLISION_BUFFER of margin, regardless of
-	-- which way either one is facing.
-	-- COLLISION_BUFFER=0 means this only rejects a REAL overlap (negative
-	-- clearance) -- two footprints placed exactly edge-to-edge (the corner-
-	-- jump placement's own zero-gap convention) register as just barely
-	-- clear, not too close.
+	-- Oriented-rectangle (separating-axis) overlap test between footprints.
+	-- COLLISION_BUFFER = 0 rejects only real overlaps; edge-to-edge is allowed.
 	local COLLISION_BUFFER = 0
-	-- exclude_index skips that one entry in placed_building_footprints --
-	-- used by the village separation pass below, which re-checks a
-	-- building that's already recorded against every OTHER building, not
-	-- against its own (stale, pre-push) footprint.
+	-- exclude_index skips that footprint (used when re-checking an already
+	-- recorded building).
 	local function Building_Too_Close(position, half_length, half_depth, rotation, exclude_index)
 		local a_len_x, a_len_z = math.cos(rotation), math.sin(rotation)
 		local a_dep_x, a_dep_z = -a_len_z, a_len_x
@@ -540,10 +358,7 @@ function StartMatch.Generate(game_data)
 					local proj_b = math.abs(b_len_x * ax + b_len_z * az) * entry.half_length + math.abs(b_dep_x * ax + b_dep_z * az) * entry.half_depth
 					return center_dist > proj_a + proj_b + buffer
 				end
-				-- If ANY of the four candidate axes (both rectangles' own
-				-- length/depth directions) separates the two footprints with
-				-- enough margin, they're not too close. Only if NONE of the
-				-- four separates them do we call it an overlap.
+				-- Clear if any of the four axes separates the footprints.
 				if not (Axis_Clear(a_len_x, a_len_z) or Axis_Clear(a_dep_x, a_dep_z) or Axis_Clear(b_len_x, b_len_z) or Axis_Clear(b_dep_x, b_dep_z)) then
 					return true
 				end
@@ -551,11 +366,7 @@ function StartMatch.Generate(game_data)
 		end
 		return false
 	end
-	-- Returns the new entry's index (shared across placed_houses and
-	-- placed_building_footprints, since both always grow together here)
-	-- plus the footprint table itself, so a caller that needs to move
-	-- this building later (the village separation pass below) can update
-	-- both in place without having to search for it again.
+	-- Returns the shared index and footprint so callers can move the building later.
 	local function Record_Building(position, half_length, half_depth, rotation)
 		table.insert(placed_houses, position)
 		local entry = {
@@ -567,20 +378,8 @@ function StartMatch.Generate(game_data)
 		table.insert(placed_building_footprints, entry)
 		return #placed_houses, entry
 	end
-	local function Darken_Model(model, color)
-		for _, part in ipairs(model:GetDescendants()) do
-			if part:IsA("BasePart") then
-				part.Color = color
-			end
-		end
-	end
 	local function Anchor_Model(model)
-		-- A bare MeshPart/Part (no Model wrapper, same case Measure_Building
-		-- now handles above) has no descendants of its own to anchor via
-		-- the loop below -- GetDescendants() only looks at children, never
-		-- the instance itself -- so without this it would get cloned,
-		-- parented to workspace, and immediately fall under gravity,
-		-- unanchored.
+		-- A bare part has no descendants, so anchor it directly.
 		if model:IsA("BasePart") then
 			model.Anchored = true
 		end
@@ -590,20 +389,12 @@ function StartMatch.Generate(game_data)
 			end
 		end
 	end
-	-- Rename (or duplicate and rename) any part in a building model to
-	-- exactly "ColorVariant" to make it eligible for per-building color
-	-- variation. ONE random shift is rolled per building INSTANCE (not per
-	-- part), then applied to every ColorVariant part's own authored color
-	-- -- so a whole building reads as one coherent, slightly different
-	-- shade rather than each part drifting independently.
+	-- Parts (or groups) named "ColorVariant" get one random shade shift per building,
+	-- applied to each part's own color, so the building reads as one coherent tint.
 	local COLOR_VARIANT_PART_NAME = "ColorVariant"
-	-- How far, per R/G/B channel (0-255), the shift can go in either
-	-- direction. Placeholder, tune to taste.
+	-- Max shift per R/G/B channel (0-255). Placeholder.
 	local COLOR_SHIFT_RANGE = 20
-	-- ColorVariant2 picks an entirely different color rather than shifting
-	-- the part's own authored shade. A small curated palette of light,
-	-- airy tones keeps every pick a believable material color instead of
-	-- risking something saturated/neon. Placeholder palette, tune to taste.
+	-- Parts named "ColorVariant2" get one color from this palette per building.
 	local COLOR_VARIANT2_PART_NAME = "ColorVariant2"
 	local COLOR_VARIANT2_PALETTE = {
 		Color3.fromRGB(235, 230, 215), -- soft off-white / cream
@@ -622,12 +413,7 @@ function StartMatch.Generate(game_data)
 			math.clamp(base_color.B * 255 + db, 0, 255)
 		)
 	end
-	-- A Union/NegateOperation's .Color only renders when its own
-	-- UsePartColor property is true -- left false (common when a union
-	-- keeps each source part's color baked in per-face), setting .Color
-	-- would silently do nothing. Forcing UsePartColor on for any
-	-- PartOperation is safe here since this only touches parts already
-	-- opted in by name (ColorVariant/ColorVariant2).
+	-- Unions only show .Color when UsePartColor is true, so turn it on.
 	local function Apply_Part_Color(part, color)
 		if part:IsA("PartOperation") then
 			part.UsePartColor = true
@@ -638,26 +424,15 @@ function StartMatch.Generate(game_data)
 		local shift_r = math.random(-COLOR_SHIFT_RANGE, COLOR_SHIFT_RANGE)
 		local shift_g = math.random(-COLOR_SHIFT_RANGE, COLOR_SHIFT_RANGE)
 		local shift_b = math.random(-COLOR_SHIFT_RANGE, COLOR_SHIFT_RANGE)
-		-- One palette pick per building INSTANCE -- every ColorVariant2
-		-- part/group in a given building lands on this SAME alternate
-		-- color, reading as one coherent re-paint.
 		local variant2_color = COLOR_VARIANT2_PALETTE[math.random(#COLOR_VARIANT2_PALETTE)]
-		-- Individual parts named ColorVariant: each shifts from ITS OWN
-		-- authored color, so two differently-colored parts (a red brick
-		-- and a white window frame, say) stay visually distinct from each
-		-- other -- just each nudged by the same shift.
+		-- Single parts shift from their own color.
 		for _, part in ipairs(model:GetDescendants()) do
 			if part:IsA("BasePart") and part.Name == COLOR_VARIANT_PART_NAME then
 				Apply_Part_Color(part, Shift_Color(part.Color, shift_r, shift_g, shift_b))
 			end
 		end
-		-- A GROUP (Model) named ColorVariant is handled differently from an
-		-- individual part with that name: every BasePart inside the group
-		-- converges on ONE identical final color, anchored off the first
-		-- part found inside it -- so a whole wall segment, say, reads as a
-		-- single uniform repaint instead of a patchwork of independently-
-		-- shifted bricks, frames, trim, etc. Still uses the same building-
-		-- wide shift, so multiple groups in one building move together.
+		-- A Model named ColorVariant: every part in it gets the same final color,
+		-- based on its first part, so the group reads as one repaint.
 		for _, group in ipairs(model:GetDescendants()) do
 			if group:IsA("Model") and group.Name == COLOR_VARIANT_PART_NAME then
 				local anchor_color
@@ -677,10 +452,7 @@ function StartMatch.Generate(game_data)
 				end
 			end
 		end
-		-- ColorVariant2: same individual-part-vs-group split as ColorVariant
-		-- above, except every tagged part/group is set directly to the one
-		-- palette color rolled for this building instance, rather than
-		-- shifting from whatever its own authored color was.
+		-- ColorVariant2: same part/group split, set to the building's palette color.
 		for _, part in ipairs(model:GetDescendants()) do
 			if part:IsA("BasePart") and part.Name == COLOR_VARIANT2_PART_NAME then
 				Apply_Part_Color(part, variant2_color)
@@ -696,12 +468,7 @@ function StartMatch.Generate(game_data)
 			end
 		end
 	end
-	-- Crates spawn into their own folder rather than loose in workspace,
-	-- separate from building clones. Not currently load-bearing for
-	-- collision -- every ground/placement raycast in this file already
-	-- uses an Include-only filter on just the terrain -- but keeps crates
-	-- cleanly separated from building geometry for any raycast added later
-	-- that isn't terrain-only.
+	-- Crates go in their own folder, separate from buildings.
 	local loot_crate_folder = Instance.new("Folder")
 	loot_crate_folder.Name = "SpawnedLootCrates"
 	loot_crate_folder.Parent = workspace
@@ -710,24 +477,9 @@ function StartMatch.Generate(game_data)
 	local function Populate_Building(building)
 		local spawned_pos = {}
 		local spawned_count = 0
-		-- [found] "many of the loot items and crates... tend to be
-		-- floating rather than actually on the floor" -- every item here
-		-- already raycasts down to find the real floor (crates, floor
-		-- loot, props all do), but each pass only ever excluded its OWN
-		-- marker type from its own ray -- never anything already spawned
-		-- by an earlier pass, or an earlier iteration of the SAME pass.
-		-- In a dense multi-marker building like Unfinished Structure, a
-		-- later item's downward ray can hit the TOP of an earlier crate/
-		-- prop/dropped item sitting near its marker instead of reaching
-		-- the floor underneath it -- which reads as floating, especially
-		-- once that earlier object (a crate above all) gets picked up
-		-- and vanishes out from under it. exclude_list is now ONE shared,
-		-- growing list every raycast in this function reads from --
-		-- seeded with every marker up front (so no marker of any of the
-		-- three types can block any other pass's ray either), then every
-		-- spawned crate/item/prop is appended to it (and the RaycastParams
-		-- refreshed) the instant it's placed, so nothing placed earlier
-		-- in this same building can ever block a later raycast again.
+		-- Every placement raycast here shares one growing exclude list: all markers up
+		-- front, then each crate/item/prop as it's placed, so nothing spawned earlier
+		-- in the building can catch a later ray and leave items floating.
 		local exclude_list = {}
 		local exclude_params = RaycastParams.new()
 		exclude_params.FilterType = Enum.RaycastFilterType.Exclude
@@ -743,13 +495,7 @@ function StartMatch.Generate(game_data)
 		local prop_markers = {}
 		for _, obj in ipairs(building:GetDescendants()) do
 			if obj:IsA("BasePart") and (obj.Name == "CrateSpawn" or obj.Name == "LootFloorArea" or obj.Name == "PropSpawnArea") then
-				-- [found] crates were floating -- CrateSpawn markers were
-				-- never forced invisible/non-collide/non-query the way
-				-- LootFloorArea/PropSpawnArea already are, so one left
-				-- visible/solid in Studio stayed that way in-game, and
-				-- (now that Spawn_Crate_At raycasts off it below) a solid
-				-- marker sitting in the ray's path would otherwise hit
-				-- itself instead of the real floor underneath it.
+				-- Markers must not block the floor raycasts.
 				obj.CanCollide = false
 				obj.CanQuery = false
 				obj.Transparency = 1
@@ -765,31 +511,15 @@ function StartMatch.Generate(game_data)
 		end
 		Refresh_Exclude()
 		Shuffle_List(markers)
-		-- [stated] "4 story buildings having a minimum of 2 crates and max
-		-- of 5, 2 story apartments having a minimum of 1 crate and max of 3
-		-- and shops having no minimum and a max of 1 crate" — keyed by the
-		-- building's own Name, which Instance:Clone() preserves (same
-		-- convention the old Warehouse-only special case already relied
-		-- on). Anything not listed here (Warehouse, the scatter houses if
-		-- they ever get CrateSpawn markers too) keeps the previous
-		-- default — no minimum, max 2 — rather than silently picking up a
-		-- min/max nobody asked for it to have.
+		-- Crate counts per building Name. Unlisted buildings: no minimum, max 2.
 		local BUILDING_CRATE_CONFIG = {
 			["4 Floor Apartment"] = {Min = 2, Max = 5},
 			["2 Floor Apartment"] = {Min = 1, Max = 3},
 			["Abandoned Shop"] = {Min = 0, Max = 1},
 			Warehouse = {Min = 0, Max = 4}, -- unchanged from the old special-case
-			-- [stated] "include it for the crate spawn sweep with it having
-			-- a minimum of 0 crates and max of 1"
 			["Large Garbage Bin"] = {Min = 0, Max = 1},
-			-- [stated] De-Roofed House's new Crate Spawns/CrateSpawn marker
-			-- -- "max of 1 crates spawning with a minimum of 0"
 			["De-Roofed House"] = {Min = 0, Max = 1},
-			-- [stated] "I've fleshed out the brickwork house as well with
-			-- the same crate values as the de-roofed house"
 			["Brickwork House"] = {Min = 0, Max = 1},
-			-- [stated] "for unfinished buildings make the minimum crate
-			-- spawn 2 and max 4"
 			["Unfinished Structure"] = {Min = 2, Max = 4},
 		}
 		local DEFAULT_CRATE_CONFIG = {Min = 0, Max = 2}
@@ -804,19 +534,8 @@ function StartMatch.Generate(game_data)
 			end
 			return true
 		end
-		-- [found] "crates... tend to be floating rather than actually on
-		-- the floor" -- crates used to PivotTo marker.Position directly,
-		-- with no raycast and no ground offset at all, unlike literally
-		-- every other placement system in this file. A crate's pivot
-		-- sitting at its own geometric center (the normal default) then
-		-- floats it up by half its own height above wherever the marker
-		-- itself happens to be. Fixed the same way LootFloorArea/
-		-- PropSpawnArea already are: a short raycast off the marker to
-		-- find the real floor underneath it (robust to the marker not
-		-- being placed pixel-perfect, and to multi-level/ramp buildings
-		-- like Unfinished Structure), plus the same automatic bounding-
-		-- box ground offset Get_Base_Ground_Offset already gives every
-		-- other piece of scattered decor.
+		-- Raycast down from the marker to the real floor and add the crate's ground
+		-- offset, so crates sit on the floor.
 		local function Spawn_Crate_At(marker)
 			local crate_rotation = math.rad(math.random(0, 359))
 			local crate_clone = crate:Clone()
@@ -832,9 +551,6 @@ function StartMatch.Generate(game_data)
 			crate_clone:SetAttribute("Rarity", Roll_Crate_Rarity())
 			crate_clone.Parent = loot_crate_folder
 			crate_loot.register_crate(crate_clone)
-			-- [found] a second crate placed near this one would otherwise
-			-- raycast straight onto THIS crate's roof instead of the
-			-- floor -- see the shared exclude_list note above.
 			Exclude_From_Now_On(crate_clone)
 			table.insert(spawned_pos, marker.Position)
 			spawned_count += 1
@@ -847,11 +563,7 @@ function StartMatch.Generate(game_data)
 				Spawn_Crate_At(marker)
 			end
 		end
-		-- The chance-based pass above can leave a building under its
-		-- configured minimum (even at zero, on bad rolls) — force
-		-- additional crates onto still-eligible markers (same spacing rule,
-		-- no chance check this time since these are no longer optional)
-		-- until the minimum is met or there's nowhere left to put one.
+		-- Top up to the building's minimum on remaining eligible markers.
 		if spawned_count < min_crates then
 			for _, marker in ipairs(markers) do
 				if spawned_count >= min_crates then
@@ -862,14 +574,8 @@ function StartMatch.Generate(game_data)
 				end
 			end
 		end
-		-- Place a BasePart named LootFloorArea flat on a room's floor in
-		-- Studio (any size/rotation -- footprint read from Size/CFrame) to
-		-- mark it as scatterable. Uses a SHORT raycast starting just above
-		-- the marker rather than a long outdoor-style one, since on an
-		-- upper floor a long-range ray would hit the roof first instead of
-		-- that floor's own surface. Marker collection/CanCollide-CanQuery-
-		-- Transparency forcing now happens once up front (see exclude_list
-		-- above) rather than here.
+		-- LootFloorArea: a flat BasePart marking a scatter area on a floor (any size or
+		-- rotation). Short raycast so upper floors hit their own surface.
 		if #floor_loot_markers > 0 then
 			for _, marker in ipairs(floor_loot_markers) do
 				local roll_count = math.random(floor_loot_data.RollCount.min, floor_loot_data.RollCount.max)
@@ -884,9 +590,6 @@ function StartMatch.Generate(game_data)
 					if result then
 						local item_name = crate_loot.weighted_pick(floor_loot_data.LootPool)
 						local spawned_ok, item_part = dropped_items.spawn_ground_item_at(item_name, 1, result.Position)
-						-- [found] a second roll landing near the first
-						-- would otherwise raycast onto the first item's
-						-- top instead of the floor -- see exclude_list.
 						if spawned_ok and typeof(item_part) == "Instance" then
 							Exclude_From_Now_On(item_part)
 						end
@@ -896,21 +599,9 @@ function StartMatch.Generate(game_data)
 				end
 			end
 		end
-		-- [stated] "props I would want to place randomly throughout the
-		-- multiple levels of the unfinished structure... would this be a
-		-- similar case to the lootfloorareas... several invisible areas
-		-- where I would want props spawned and we could have the props
-		-- spawned in randomly throughout those spaces" -- structurally
-		-- identical to the LootFloorArea pass above (same per-marker
-		-- random-point-in-footprint + short downward raycast so an upper
-		-- floor hits that floor's own surface, not the roof or a floor
-		-- below), just a separate marker name (PropSpawnArea) and pool
-		-- (PROP_SCATTER.pool) so loot and prop density tune independently
-		-- and a building can have either without the other. Folded into
-		-- this same function (rather than its own, like the water-drink
-		-- feature learned the hard way) since Generate is already right
-		-- up against the 200-local ceiling -- these locals land in this
-		-- function's own budget instead.
+		-- PropSpawnArea markers: same approach as LootFloorArea, separate pool, so loot
+		-- and prop density tune independently. Kept in this function to stay under the
+		-- local limit.
 		if #prop_markers > 0 and #PROP_SCATTER.pool > 0 then
 			for _, marker in ipairs(prop_markers) do
 				local roll_count = math.random(PROP_SCATTER.min, PROP_SCATTER.max)
@@ -928,16 +619,8 @@ function StartMatch.Generate(game_data)
 						local ground_offset = GROUND_OFFSET[prop_choice] or 0
 						local rotation = math.rad(math.random(0, 359))
 						prop:PivotTo(CFrame.new(result.Position + Vector3.new(0, ground_offset, 0)) * CFrame.Angles(0, rotation, 0))
-						-- [found] a second prop landing near the first
-						-- would otherwise raycast onto the first prop's
-						-- top instead of the floor -- see exclude_list.
 						Exclude_From_Now_On(prop)
-						-- Defensive, same reasoning as the LootFloorArea
-						-- markers' forced CanCollide/Transparency above --
-						-- Props is a brand-new folder, so unlike the
-						-- long-established nature-decoration templates
-						-- there's no track record every piece in it is
-						-- already anchored in Studio.
+						-- Props aren't guaranteed anchored in Studio.
 						Anchor_Model(prop)
 						prop.Parent = building
 					else
@@ -962,24 +645,9 @@ function StartMatch.Generate(game_data)
 		}
 		for _, zone in ipairs(settlement_zones) do
 			local distance = (pos - zone.center).Magnitude
-			-- Terrain is held fully flat out to this radius, past
-			-- zone.flat_radius itself -- see SETTLEMENT_FLAT_TERRAIN_PADDING
-			-- above for why. Whatever fills zone.flat_radius with buildings
-			-- should still bound itself by zone.flat_radius directly, so
-			-- this only widens how far the guaranteed-flat ground extends
-			-- past the building layout, never how far out buildings
-			-- themselves get placed. Clamped a few blocks inside
-			-- zone.radius so there's always at least a small blend ring
-			-- left.
-			--
-			-- [stated] a village's own radius (~6-8 blocks total) is far
-			-- too small for the city-tuned padding/clamp above -- the flat
-			-- 60-stud padding alone would blow past a village's entire
-			-- radius, and the "-5 blocks" clamp margin (fine when radius
-			-- is 100+ blocks) would eat nearly all of it instead. Villages
-			-- use their own flat_radius directly with no extra padding,
-			-- relying on their (small but present) radius-flat_radius gap
-			-- for the blend ring instead.
+			-- Cities: flat terrain extends SETTLEMENT_FLAT_TERRAIN_PADDING past flat_radius,
+			-- clamped to leave a blend ring. Villages are too small for that padding and use
+			-- flat_radius directly.
 			local terrain_flat_radius
 			if zone.kind == "village" then
 				terrain_flat_radius = zone.flat_radius
@@ -1053,10 +721,6 @@ function StartMatch.Generate(game_data)
 		local material = forest_floor_choice
 		local biome = "Forest"
 		if zone_context.in_flat_zone then
-			-- [stated] "ground should be mainly dirt, with some mud and a
-			-- little concrete" -- villages get their own weighting
-			-- instead of the city's concrete-heavy one, picked via the
-			-- zone kind Get_Settlement_Context now tracks.
 			material = (zone_context.kind == "village") and village_floor_choice or settlement_floor_choice
 			biome = "Settlement"
 		elseif height >= 200 then
@@ -1138,133 +802,58 @@ function StartMatch.Generate(game_data)
 		local house = house_model:Clone()
 		Anchor_Model(house)
 		Randomize_Building_Colors(house)
-		-- Scale BEFORE PivotTo: ScaleTo resizes everything around the
-		-- model's current pivot without moving that pivot, so scaling first
-		-- (while the clone is still sitting wherever its template lives)
-		-- and then rigidly repositioning the already-scaled model lands it
-		-- exactly at `position` — same as the unscaled path, just smaller.
+		-- Scale before PivotTo: ScaleTo keeps the pivot in place, so scaling first and
+		-- then moving lands the model exactly at position.
 		if scale and scale ~= 1 then
 			house:ScaleTo(scale)
 		end
-		-- [fixed] "how can I tilt the trashpile by 90 degrees? it's
-		-- spawning tilted halfway out of the ground" -- rotation_y is a
-		-- single YAW angle (rotation around the vertical axis only), which
-		-- can never fix a piece that's lying on the wrong SIDE to begin
-		-- with -- that needs an actual tilt around a horizontal axis
-		-- instead. RUBBLE_TILT_CORRECTION (built above, keyed by model
-		-- instance same as every other per-model correction table) is a
-		-- fixed CFrame rather than a bare angle, applied AFTER rotation_y
-		-- here: world orientation ends up rotation_y∘tilt, which means the
-		-- tilt is resolved in the model's OWN frame first (correcting its
-		-- inherent lying-down-wrong orientation) and the already-corrected
-		-- result then spins around the world vertical axis with everything
-		-- else -- same order DroppedItems.lua uses for WEAPON_FLAT_ROTATION.
-		-- Every other model (not in the table) gets CFrame.new() here,
-		-- i.e. no change from before.
+		-- Tilt correction is applied in the model's own frame, then the yaw rotation.
 		local tilt_correction = RUBBLE_TILT_CORRECTION[house_model] or CFrame.new()
 		local cframe_rotation = CFrame.Angles(0, rotation_y, 0) * tilt_correction
 		house:PivotTo(CFrame.new(position.X, position.Y, position.Z) * cframe_rotation)
 		house.Parent = workspace
 		Populate_Building(house)
-		-- Returned so a caller that may need to physically move this clone
-		-- later (the village separation pass below) has the instance in
-		-- hand instead of having to search workspace for it.
+		-- Returned so the caller can move the clone later.
 		return house
 	end
-	-- [stated] "generate rows of buildings across the settlement matching
-	-- the zone's rotation angle... no space between buildings... distance
-	-- between rows [is] the average depth of the previous row plus 10...
-	-- find the centerline of the settlement based on the rotation angle
-	-- and make a road there. [Then] check all rows for those closer than
-	-- 10 studs away from the centerline road and delete those rows...
-	-- no other adjustment for now" -- first real pass at the new layout,
-	-- deliberately simple. One direction for the whole settlement (no
-	-- mirrored sides) -- along/perp are just zone.rotation's own local
-	-- Z/X, every row sweeps across the full flat-zone diameter in the
-	-- same +perp direction, and every building in the settlement shares
-	-- the same facing. A row's length is still bounded by the circular
-	-- zone's own chord at that row's distance from center -- that's
-	-- plain geometry (how wide the circle actually is there), not a
-	-- collision check -- so rows near the settlement's edge are short
-	-- and rows through the middle are long, same shape the circle
-	-- already implies.
-	--
-	-- Three steps, in order, per the spec above: Plan_Settlement_Rows
-	-- works out every row (and every building in it) first, raycasting
-	-- ground height as it goes since that's a read, not a spawn, and
-	-- hands back a list of row objects -- nothing is instanced yet.
-	-- Carve_Settlement_Road then cuts the road into terrain along the
-	-- same centerline the rows were planned around. Generate_Settlement_
-	-- Structures itself does the "delete rows too close to the road"
-	-- step -- a plain distance check between each row's own span and
-	-- the road's -- before finally handing the SURVIVING rows' buildings
-	-- to Spawn_Planned_Settlement_Buildings. No row gets shrunk or
-	-- nudged to make room; a row that's too close is simply dropped
-	-- whole.
+	-- City layout: rows of buildings across the zone, all sharing the zone's
+	-- rotation and facing. Each row's length is the circle's chord at that offset.
+	-- 1. Plan_Settlement_Rows plans every row (no instancing yet).
+	-- 2. One row near the middle is replaced by the road (Carve_Settlement_Road).
+	-- 3. Spawn_Planned_Settlement_Buildings instances the rest.
 	local BUILDING_ROW_FACING_OFFSET = math.rad(-90)
 	local SETTLEMENT_ROW_GAP = 30
 	local ROAD_WIDTH = 28
-	-- [stated] "add a random gap between buildings with a 25% chance to
-	-- occur, adding a 5 to 10 stud wide gap between buildings" -- rolled
-	-- per slot-to-slot step during planning (stage 1), same place the
-	-- zero-gap cursor advance already happens, so it's baked into every
-	-- building's position before the spawn wave (stage 2) ever runs.
+	-- 25% chance of a 5-10 stud gap between neighbors.
 	local BUILDING_GAP_CHANCE = 0.25
 	local BUILDING_GAP_MIN = 5
 	local BUILDING_GAP_MAX = 10
-	-- [stated] "for the warehouses and unfinished structures, guarantee
-	-- they have gaps between them and the other buildings in their row
-	-- with a gap of at least 10 to 20 studs" -- a GUARANTEED (not rolled)
-	-- gap, used instead of the ordinary BUILDING_GAP_CHANCE roll whenever
-	-- either side of a slot-to-slot step is one of these two large
-	-- building types.
+	-- Warehouses and unfinished structures always get a 10-20 stud gap.
 	local LARGE_BUILDING_GAP_MIN = 10
 	local LARGE_BUILDING_GAP_MAX = 20
 	local function Is_Large_Building(choice)
 		return choice == warehouse_template or choice == unfinished_structure
 	end
-	-- [stated] "for every building in each row, add a 20% chance to have
-	-- that building shift up to 5 studs towards or away from the
-	-- previous row to help give a more staggered natural feel" -- a
-	-- small per-building nudge along the PERP axis only (the direction
-	-- between rows, not along the row itself), rolled independently for
-	-- every building. Purely a position jitter on that one building's
-	-- own final spot -- row.perp_offset/row.depth bookkeeping (row-to-
-	-- row spacing, road-row selection) are untouched.
+	-- 20% chance each building shifts up to 5 studs toward/away from the previous row.
 	local BUILDING_STAGGER_CHANCE = 0.2
 	local BUILDING_STAGGER_MAX = 5
 	local function Plan_Settlement_Rows(zone, world_x, world_z, along, perp)
 		local flat_radius_studs = zone.flat_radius * block_size
 		local facing = zone.rotation + BUILDING_ROW_FACING_OFFSET
-		-- [stated] "Buildings to be generated are the shops, apartment
-		-- buildings, warehouses, and unfinished structures" -- one flat
-		-- pool, every slot picks any one of the four with no caps and no
-		-- special handling for the warehouse/unfinished structure.
 		local pool = {apartment_2f, apartment_4f, abandoned_shop, warehouse_template, unfinished_structure}
 		local rows = {}
 		local perp_offset = -flat_radius_studs
 		while perp_offset < flat_radius_studs do
 			local row_len_radius = math.sqrt(math.max(0, flat_radius_studs ^ 2 - perp_offset ^ 2))
-			-- cursor is this row's own leading edge, same corner-jump
-			-- convention as before -- always swept in the same (+1)
-			-- direction now, since there's no dead-slot bookkeeping left
-			-- that cared which way alternating rows swept.
+			-- cursor is the row's leading edge; rows always sweep in the + direction.
 			local cursor = -row_len_radius
 			local row_buildings = {}
 			local row_depth_total, row_count = 0, 0
-			-- [stated] large-building gap guarantee needs to know BOTH
-			-- neighbors of a slot-to-slot step before deciding the gap,
-			-- so the choice is now rolled (and the gap resolved) at the
-			-- TOP of the loop, before the cursor advance it depends on --
-			-- previous_choice is the last slot rolled, placed or not,
-			-- same as the cursor advance already ignored a failed ground
-			-- raycast.
+			-- Pick before advancing the cursor, since the large-building gap depends on
+			-- both neighbors.
 			local previous_choice = nil
 			while true do
-				-- One random pick per slot, no retrying a smaller one if
-				-- it doesn't fit -- "no other constraints or checks" --
-				-- so a row simply ends the moment its current pick can't
-				-- fit in whatever chord is left.
+				-- One pick per slot; the row ends when a pick doesn't fit.
 				local choice = pool[math.random(#pool)]
 				local metrics = BUILDING_METRICS[choice]
 				local scale = MODEL_SCALE[choice] or 1
@@ -1299,14 +888,7 @@ function StartMatch.Generate(game_data)
 					local ground_y = ground_result.Position.Y + metrics.pivot_to_bottom * scale - ground_sink_buffer + ground_correction
 					local facing_correction = BUILDING_FACING_CORRECTION[choice] or 0
 					local rotation = facing + facing_correction
-					-- [stated] "have them rotate 180 randomly compared to
-					-- the other buildings which are dependent on the side
-					-- of the road they're on" -- warehouses/unfinished
-					-- structures still get the same side-of-road 180 flip
-					-- as everyone else (applied later, in Generate_
-					-- Settlement_Structures), this is a SEPARATE 50/50
-					-- flip layered on top of it, independent of which
-					-- side of the road the row ends up on.
+					-- Large buildings get an extra random 180 flip on top of the side-of-road flip.
 					if Is_Large_Building(choice) and math.random() < 0.5 then
 						rotation = rotation + math.pi
 					end
@@ -1317,10 +899,6 @@ function StartMatch.Generate(game_data)
 						scale = scale,
 						half_length = along_half,
 						half_depth = depth / 2,
-						-- footprint_offset corrects ONLY the collision/
-						-- record rotation (see Measure_Building) -- the
-						-- actual visual placement rotation above is
-						-- untouched.
 						collision_rotation = rotation + metrics.footprint_offset,
 					})
 					row_depth_total = row_depth_total + depth
@@ -1329,24 +907,16 @@ function StartMatch.Generate(game_data)
 				cursor = next_cursor
 				previous_choice = choice
 			end
-			-- [stated] "distance between rows to be the average depth of
-			-- the previous row plus 10" -- a row that placed nothing
-			-- still advances by SETTLEMENT_ROW_GAP alone (average_depth
-			-- falls back to 0), so the sweep always makes progress and
-			-- can't stall out near the circle's tapering edges.
+			-- Rows advance by the previous row's average depth plus SETTLEMENT_ROW_GAP
+			-- (just the gap if the row was empty, so the sweep always progresses).
 			local average_depth = (row_count > 0) and (row_depth_total / row_count) or 0
 			table.insert(rows, {perp_offset = perp_offset, depth = average_depth, buildings = row_buildings})
 			perp_offset = perp_offset + average_depth + SETTLEMENT_ROW_GAP
 		end
 		return rows
 	end
-	-- [stated] "find the centerline of the settlement based on the
-	-- rotation angle and make a road there" -- same per-segment flush-
-	-- with-terrain carve the old road carving used (raycast each
-	-- segment so the road follows uneven ground, clear the volume above
-	-- to Air, fill a thin slab below with Asphalt), just rebuilt here
-	-- since it's wanted again. Spans the settlement's full flat-radius
-	-- diameter, same as the rows do.
+	-- Carves a road along the settlement's centerline, following the ground: clear
+	-- above each segment to Air, Asphalt slab below.
 	local function Carve_Settlement_Road(zone, world_x, world_z)
 		local flat_radius_studs = zone.flat_radius * block_size
 		local road_length = flat_radius_studs * 2
@@ -1386,11 +956,8 @@ function StartMatch.Generate(game_data)
 			end
 		end
 	end
-	-- Stage 2: instance everything the planning/road/filter steps above
-	-- already worked out. Record_Building still runs per placement so
-	-- Spawn_Wildlife's spacing check (Too_Close, off placed_houses)
-	-- keeps treating settlement buildings as occupied ground -- that's
-	-- bookkeeping for a DIFFERENT system, not a constraint on this one.
+	-- Instances the planned buildings. Record_Building also feeds the wildlife
+	-- spacing check.
 	local function Spawn_Planned_Settlement_Buildings(buildings)
 		for _, entry in ipairs(buildings) do
 			Place_House(entry.choice, entry.position, entry.rotation, true, entry.scale)
@@ -1398,25 +965,12 @@ function StartMatch.Generate(game_data)
 			task.wait()
 		end
 	end
-	-- [stated] "after everything has been spawned in... raycast pointing
-	-- down for the whole settlement, finding regions where there aren't
-	-- buildings then roll through the rubble and trash list and place
-	-- them randomly throughout the settlement" -- walks a grid across
-	-- the zone's own flat circle (same along/perp basis every other
-	-- settlement function already uses), skipping any cell too close to
-	-- an already-placed building (reusing Building_Too_Close against
-	-- placed_building_footprints, which Record_Building already filled
-	-- in during the building spawn wave above) or to the road strip,
-	-- then rolls a chance per surviving cell to drop a random rubble/
-	-- trash piece there with a fully random yaw. "Dense" density picked:
-	-- a tight grid, high per-cell chance, and a small clearance margin.
+	-- Rubble scatter: walk a grid over the zone, skip cells near buildings or the
+	-- road, and roll a chance per cell to drop a random piece with random yaw.
 	local RUBBLE_SCATTER_GRID_STEP = 12
 	local RUBBLE_SCATTER_CHANCE = 0.2
 	local RUBBLE_CLEARANCE = 5
-	-- [stated] "reduce the rate at which garbage spawns in the villages" --
-	-- same grid step/clearance as the city, just a lower per-cell chance
-	-- (40% of the city's), so villages read as noticeably sparser rather
-	-- than matching the city's density. Placeholder, easy to retune.
+	-- Villages use a lower per-cell chance than cities. Placeholder.
 	local VILLAGE_RUBBLE_SCATTER_CHANCE = 0.08
 	local function Scatter_Settlement_Rubble(zone, world_x, world_z, along, perp, road_perp_offset)
 		if #rubble_list == 0 then
@@ -1467,23 +1021,9 @@ function StartMatch.Generate(game_data)
 		local along = CFrame.Angles(0, zone.rotation, 0):VectorToWorldSpace(Vector3.new(0, 0, 1))
 		local perp = CFrame.Angles(0, zone.rotation, 0):VectorToWorldSpace(Vector3.new(1, 0, 0))
 		local rows = Plan_Settlement_Rows(zone, world_x, world_z, along, perp)
-		-- [stated] "select 1 row near the middle of the settlement of
-		-- buildings, and build the road along that... this way its
-		-- distance to either row is equal and less large as it's
-		-- directly between 2 rows" -- replaces the old fixed-at-zone-
-		-- center road entirely. The road no longer gets carved at
-		-- perp_offset 0 and then has rows checked against it for overlap
-		-- -- instead, the row whose own CENTER (perp_offset + depth/2) is
-		-- closest to 0 is picked first, that one row's buildings are
-		-- dropped, and the road is carved centered on exactly that row's
-		-- position instead of the zone's geometric center. Since the
-		-- sweep already spaces every row by (previous row's average
-		-- depth + SETTLEMENT_ROW_GAP), the distance from the road's
-		-- center to the row immediately before and the row immediately
-		-- after both work out to the same (road_row.depth / 2 + GAP) --
-		-- genuinely equal on both sides, and bounded by one row's depth
-		-- rather than however large a randomly-straddling deleted band
-		-- happened to be.
+		-- Road placement: pick the row whose center is closest to the zone center, drop
+		-- its buildings, and carve the road there. That leaves an equal gap to the rows
+		-- on either side.
 		local flat_radius_studs = zone.flat_radius * block_size
 		local road_row_index = nil
 		local road_row_distance = math.huge
@@ -1503,16 +1043,7 @@ function StartMatch.Generate(game_data)
 		local road_center_x = world_x + road_perp_offset * perp.X
 		local road_center_z = world_z + road_perp_offset * perp.Z
 		Carve_Settlement_Road(zone, road_center_x, road_center_z)
-		-- [stated] "rotate every building 180 before the deleted row and
-		-- revert the 180 rotation for buildings after the row deletion" --
-		-- the whole settlement shares one facing direction, which puts
-		-- the FAR side of the road (the back half of the sweep) front-on
-		-- to it already; the near side (before the selected row) faces
-		-- away and needs the 180 flip instead. flip_rotation starts ON
-		-- and switches OFF the moment the selected road row is reached,
-		-- so every row before it gets spun 180 (both the visual rotation
-		-- and its paired collision_rotation, so they stay in sync), and
-		-- every row after it keeps its original, unflipped rotation.
+		-- Rows before the road row are rotated 180 so both sides face the road.
 		local buildings = {}
 		local flip_rotation = true
 		for i, row in ipairs(rows) do
@@ -1531,42 +1062,16 @@ function StartMatch.Generate(game_data)
 		Spawn_Planned_Settlement_Buildings(buildings)
 		Scatter_Settlement_Rubble(zone, world_x, world_z, along, perp, road_perp_offset)
 	end
-	-- [stated] "let's drop all of the previous logic for the village
-	-- spawning and start fresh... similar to the rows of the large
-	-- settlements" -- replaces the center+ring layout entirely with a row
-	-- sweep: pick a building, record its longest side (BUILDING_METRICS.
-	-- length, the same field the settlement rows already use), advance
-	-- half that length from the row's own starting edge, place it with a
-	-- random rotation; every building after that advances by (previous
-	-- building's half length + this building's half length + gap_buffer)
-	-- instead, so buildings sit gap_buffer studs apart edge-to-edge. 2
-	-- rows per village (row_count), aligned to the village's own
-	-- zone.rotation -- the same along/perp local axes Plan_Settlement_
-	-- Rows already uses, not world X/Z. Each row's distance cap is its own
-	-- chord length (2x the village's flat_radius at that row's offset)
-	-- plus overshoot_buffer, so a row reliably sweeps a bit past the true
-	-- circular edge instead of always stopping short of it -- otherwise
-	-- every building would land inside the circle by construction and the
-	-- final bounds check below would never actually delete anything.
-	-- [stated]: "one last check on each building identifying if any of
-	-- the building is outside the settlement bounds which if it is it
-	-- will be deleted" -- see the bounds-check pass at the end of
-	-- Generate_Village_Structures.
+	-- Village layout: 2 rows along zone.rotation. Each building advances by half
+	-- its length plus the previous half length plus gap_buffer. Rows overshoot their
+	-- chord slightly; a final bounds check removes anything poking outside.
 	local VILLAGE_ROW = {
 		row_count = 2,
 		gap_buffer = 10,
-		-- Placeholder magnitude for how far past a row's own chord the
-		-- sweep is allowed to run before stopping -- tune if villages end
-		-- up losing too many/too few buildings to the bounds check.
+		-- How far past the chord a village row may run. Placeholder.
 		overshoot_buffer = 40,
 	}
-	-- [stated] "add the rubble/trash spawning to the small settlements as
-	-- well" -- same grid-walk/clearance/chance approach as Scatter_
-	-- Settlement_Rubble above, reusing the same RUBBLE_SCATTER_* constants
-	-- for consistent density, but simplified: villages have no road and no
-	-- along/perp facing convention to exclude a band for, so this just
-	-- walks a plain world-axis-aligned grid across the village's flat
-	-- circle instead of a rotated one.
+	-- Same rubble scatter as cities, on a plain world-aligned grid (no road).
 	local function Scatter_Village_Rubble(zone, world_x, world_z)
 		if #village_rubble_list == 0 then
 			return
@@ -1607,15 +1112,8 @@ function StartMatch.Generate(game_data)
 			coord_z = coord_z + RUBBLE_SCATTER_GRID_STEP
 		end
 	end
-	-- Works out one row's buildings (position/rotation/footprint) without
-	-- instancing anything yet -- same plan-then-spawn split Plan_
-	-- Settlement_Rows/Spawn_Planned_Settlement_Buildings already use, so
-	-- the bounds check in Generate_Village_Structures can run against
-	-- every row's buildings before any of them exist in the world.
-	-- perp_offset is this row's own fixed distance from village center
-	-- along the perp axis (which of the row_count parallel rows this is);
-	-- along/perp are the same zone.rotation-derived local axes Generate_
-	-- Settlement_Structures already builds for the large settlements.
+	-- Plans one village row without instancing, so the bounds check can run first.
+	-- perp_offset is this row's distance from the village center.
 	local function Plan_Village_Row(zone, world_x, world_z, along, perp, perp_offset)
 		local flat_radius_studs = zone.flat_radius * block_size
 		local row_len_radius = math.sqrt(math.max(0, flat_radius_studs ^ 2 - perp_offset ^ 2))
@@ -1628,14 +1126,7 @@ function StartMatch.Generate(game_data)
 			local choice = scatter_house_list[math.random(#scatter_house_list)]
 			local metrics = BUILDING_METRICS[choice]
 			local half_length, half_depth = metrics.length / 2, metrics.depth / 2
-			-- [stated] "advance the row half of that building's length"
-			-- for the first building (relative to the row's own starting
-			-- point), then for every building after "add half that
-			-- distance to the half distance of the current building with
-			-- an addition +10... advance by that position further down
-			-- the row" -- a center-to-center step of half_length(prev) +
-			-- half_length(this) + gap_buffer, leaving exactly gap_buffer
-			-- studs of clearance between the two footprints' facing edges.
+			-- Center-to-center step = half(prev) + half(this) + gap_buffer.
 			if signed_position then
 				signed_position = signed_position + previous_half_length + half_length + VILLAGE_ROW.gap_buffer
 			else
@@ -1676,13 +1167,7 @@ function StartMatch.Generate(game_data)
 		local flat_radius_studs = zone.flat_radius * block_size
 		local along = CFrame.Angles(0, zone.rotation, 0):VectorToWorldSpace(Vector3.new(0, 0, 1))
 		local perp = CFrame.Angles(0, zone.rotation, 0):VectorToWorldSpace(Vector3.new(1, 0, 0))
-		-- [stated] "2 rows in total for each village, with their starting
-		-- points selected so that each row is placed equally from each
-		-- other to the edge of the village" -- splits the village's full
-		-- perp-axis diameter into row_count + 1 equal segments, so every
-		-- row sits exactly one segment from the next (and from the two
-		-- edges) -- for row_count = 2 that's perp offsets at -flat_radius/3
-		-- and +flat_radius/3.
+		-- Rows split the diameter into equal segments (2 rows: offsets +/- flat_radius/3).
 		local placements = {}
 		for i = 1, VILLAGE_ROW.row_count do
 			local perp_offset = -flat_radius_studs + i * (2 * flat_radius_studs / (VILLAGE_ROW.row_count + 1))
@@ -1698,14 +1183,8 @@ function StartMatch.Generate(game_data)
 			table.insert(spawned, {house = house, index = index})
 			task.wait()
 		end
-		-- [stated] "one last check on each building identifying if any of
-		-- the building is outside the settlement bounds which if it is it
-		-- will be deleted" -- checks all 4 corners of each building's own
-		-- footprint (not just its center point) against the village's
-		-- flat circle, so a building that's mostly inside but still pokes
-		-- a corner past the edge still gets caught. Removals are
-		-- collected first and applied in descending index order so an
-		-- earlier removal can't shift the index a later one still needs.
+		-- Remove buildings with any footprint corner outside the village circle
+		-- (highest index first so indices stay valid).
 		local remove_indices = {}
 		for _, placed in ipairs(spawned) do
 			local footprint = placed_building_footprints[placed.index]
@@ -1783,28 +1262,10 @@ function StartMatch.Generate(game_data)
 			end
 		end
 	end
-	-- [stated] "settlements cannot spawn within a certain distance of the
-	-- edges of the map... make sure the settlement doesn't clip into the
-	-- walls... more fair so some players don't spawn right in front of a
-	-- city while others don't" -- bounded against wall_flats_start
-	-- (where terrain itself already starts flattening toward the wall)
-	-- rather than the hard map_radius edge, since that ramp is already
-	-- "the wall" visually and the player spawn ring (Arena_Spawns, at
-	-- map_radius*block_size - 40) sits further out again -- keeping a
-	-- settlement's own outer blend ring (zone.radius) inside this bound
-	-- means every settlement stays off the wall's ramp AND the same
-	-- minimum distance from the spawn ring, no matter which direction
-	-- it ends up in. SETTLEMENT_WALL_BUFFER reuses clear_wall_distance's
-	-- existing 50-block margin (same one natural decor already treats
-	-- as "safely clear of the wall") but gets its own named constant --
-	-- a whole settlement is a much bigger thing to keep clear than a
-	-- tree, so it's worth tuning independently later.
+	-- Keep settlements (including their blend ring) this far inside the wall
+	-- flattening ring, so they stay off the wall and away from the spawn ring.
 	local SETTLEMENT_WALL_BUFFER = 50
-	-- [stated] shared by both the city loop below and the village loop
-	-- after it -- true when candidate_center (with its own candidate_
-	-- radius) would land too close to an EXISTING zone of either kind,
-	-- using each zone's own radius rather than a flat distance (see
-	-- SETTLEMENT_SEPARATION_BUFFER above for why).
+	-- True if the candidate would be too close to any existing city or village.
 	local function Settlement_Overlaps_Existing(candidate_center, candidate_radius)
 		for _, zone in ipairs(settlement_zones) do
 			if (candidate_center - zone.center).Magnitude < (candidate_radius + zone.radius + SETTLEMENT_SEPARATION_BUFFER) then
@@ -1818,11 +1279,7 @@ function StartMatch.Generate(game_data)
 		local angle = math.random() * math.pi * 2
 		local flat_radius = math.random(75, 100)
 		local radius = flat_radius + math.random(25, 50)
-		-- Rolling radius before dist lets the DIST range itself be
-		-- clamped so this settlement's outer edge (dist + radius) can
-		-- never land past the wall buffer in the first place -- no
-		-- separate reject-and-retry needed for that case, just a
-		-- smaller candidate ring for a bigger-than-average settlement.
+		-- Clamp the distance so the settlement's edge can't reach the wall buffer.
 		local max_dist = math.min(map_radius * 0.65, (wall_flats_start - SETTLEMENT_WALL_BUFFER) - radius)
 		local dist = math.random(map_radius * 0.25, max_dist)
 		local center_x = math.cos(angle) * dist
@@ -1839,17 +1296,8 @@ function StartMatch.Generate(game_data)
 			})
 		end
 	end
-	-- [stated] "add 5-6 smaller settlements throughout the map... located
-	-- in the plains biomes" -- a village candidate is checked against
-	-- Compute_Terrain_Data's own height/moisture biome logic (the exact
-	-- same thing that will classify this ground during the real terrain
-	-- pass), sampled at the center plus the 4 cardinal edges of its flat
-	-- radius so a candidate spanning a biome boundary gets rejected too,
-	-- not just one whose center happens to land on plains. That same
-	-- Compute_Terrain_Data call already reports biome="Settlement" for
-	-- anywhere too close to an existing zone, so this also doubles as
-	-- part of the separation check (on top of Settlement_Overlaps_
-	-- Existing, which still runs first since it's far cheaper).
+	-- Villages must be on plains: check the biome at the center and the 4 edge
+	-- points (also rejects spots too near another settlement).
 	local function Village_Site_Is_Plains(center_x, center_z, flat_radius_blocks)
 		local offsets = {{0, 0}, {flat_radius_blocks, 0}, {-flat_radius_blocks, 0}, {0, flat_radius_blocks}, {0, -flat_radius_blocks}}
 		for _, offset in ipairs(offsets) do
@@ -1886,28 +1334,13 @@ function StartMatch.Generate(game_data)
 	end
 	settlement_data.set_data(settlement_zones, block_size)
 	local detail_map, chunk_radius = Build_Detail_Map()
-	-- [stated] no plants in the mountains, none underwater, and none in the
-	-- flattened rim ring around the arena wall where players spawn (except
-	-- a couple sparse dead stumps/dead bushes there). Matches the height>50
-	-- threshold already used elsewhere for "this is mountain terrain"
-	-- (mounty_floor material, dark rock choice), and wall_flats_start —
-	-- already the boundary Compute_Terrain_Data flattens height toward
-	-- going into the wall — for "this is the spawn rim".
+	-- No plants in mountains (height > 50), underwater, or in the spawn rim
+	-- (only sparse dead stumps/bushes there).
 	local MOUNTAIN_PLANT_CEILING = 50
 	local RIM_DEAD_DECOR_CHANCE = 0.004
 	local min_height = -60
-	-- [stated] "a random number of bushes within the map, like crates,
-	-- where holding down E allows you to forage through the bush for
-	-- berries... a foraged class food item... random amount between 2-5...
-	-- once a bush has been foraged it can no longer be foraged and the
-	-- prompt to interact will disappear" -- only the LIVE bush variant
-	-- qualifies (NATURE_MODELS.bush_live, not the dead decorative one),
-	-- rolled independently each time one is about to be placed below.
-	-- "Preserved Berries" is ItemData's existing Foraged-tier food entry
-	-- (Value 200, Weight 0.5) whose own comment already flags it as
-	-- waiting on exactly this system -- granted straight into the
-	-- triggering player's inventory via PlayerInventory.add_item, per
-	-- [stated] "the player would receive" (no ground-drop step).
+	-- Forageable bushes: some live bushes get a prompt; holding E gives 2-5
+	-- Preserved Berries straight to inventory, once per bush.
 	local FORAGE = {
 		chance = 0.1,
 		berry_min = 2,
@@ -1915,34 +1348,18 @@ function StartMatch.Generate(game_data)
 		item_name = "Preserved Berries",
 		hold_duration = 1,
 		max_distance = 10,
-		-- [stated] "shaded a red color, which reverts to the normal green
-		-- after it's been foraged" -- see the Highlight instance in
-		-- Try_Make_Bush_Forageable below: it overlays this color on top of
-		-- the bush rather than touching the mesh's own material, so
-		-- "reverts to normal" is just destroying the overlay.
+		-- Shown with a Highlight overlay; destroying it restores the normal look.
 		highlight_color = Color3.fromRGB(200, 30, 30),
 	}
-	-- Bush clones can be a bare MeshPart/Part (no Model wrapper -- same
-	-- case Anchor_Model/Measure_Building already handle) or a Model, so a
-	-- ProximityPrompt needs a BasePart found either way before it can be
-	-- parented.
+	-- Bushes can be a bare part or a Model; find a BasePart for the prompt.
 	local function Get_Interactable_Part(instance)
 		if instance:IsA("BasePart") then
 			return instance
 		end
 		return instance.PrimaryPart or instance:FindFirstChildWhichIsA("BasePart", true)
 	end
-	-- [stated] "the bush shows up just fine, doesn't look any different
-	-- though" -- the Color3-tint approach was the bug: setting Color3 on a
-	-- TEXTURED MeshPart doesn't paint over it, it MULTIPLIES with the
-	-- mesh's own texture colors channel-by-channel. A mostly-green texture
-	-- times a red tint lands on a barely-different dark muddy green, not
-	-- red -- exactly "shows up fine, doesn't look any different". A
-	-- Highlight instance sidesteps this entirely: it draws an outline/fill
-	-- overlay on top of whatever the model actually looks like, completely
-	-- independent of its material or texture, and needs no snapshot/
-	-- restore bookkeeping -- the original mesh is never touched, so
-	-- "reverts to normal" is just Destroy()ing the highlight.
+	-- Uses a Highlight, because tinting a textured MeshPart multiplies with the
+	-- texture and barely shows.
 	local function Try_Make_Bush_Forageable(bush_instance, bush_choice)
 		if bush_choice ~= NATURE_MODELS.bush_live then
 			return
@@ -1950,13 +1367,7 @@ function StartMatch.Generate(game_data)
 		if math.random() >= FORAGE.chance then
 			return
 		end
-		-- [stated] the model's real named children are Leaves1/Leaves2/
-		-- Leaves3/Branches -- the generic "first BasePart found" search
-		-- landed on a part buried inside Branches (visually just a thin
-		-- stick, barely visible, and likely screened by the bush's OWN
-		-- other geometry from most angles -- see RequiresLineOfSight
-		-- below). Leaves1 is a named, stable, visually prominent part on
-		-- every Live Bush clone -- use it directly instead of guessing.
+		-- Leaves1 is a prominent named part on every Live Bush.
 		local leaf = bush_instance:FindFirstChild("Leaves1")
 		local part = (leaf and leaf:IsA("BasePart")) and leaf or Get_Interactable_Part(bush_instance)
 		if not part then
@@ -1968,17 +1379,8 @@ function StartMatch.Generate(game_data)
 		highlight.FillTransparency = 0.3
 		highlight.OutlineColor = FORAGE.highlight_color
 		highlight.OutlineTransparency = 0
-		-- Occluded mode only draws where the part is actually visible --
-		-- same self-occlusion issue as RequiresLineOfSight above: Leaves1
-		-- sitting behind the bush's OWN other leaves/branches from a given
-		-- angle would render the highlight invisible even though it's
-		-- genuinely there. AlwaysOnTop draws through that (and through
-		-- anything else in front of it), matching the same fix already
-		-- applied to the prompt for the same reason.
+		-- AlwaysOnTop so the bush's own leaves don't hide the highlight.
 		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-		-- [stated] "can we highlight 1 of the leaf sections" -- adorning
-		-- just Leaves1 (not the whole bush_instance) is what actually
-		-- limits the glow to one leaf cluster rather than the whole model.
 		highlight.Adornee = part
 		highlight.Parent = bush_instance
 		local prompt = Instance.new("ProximityPrompt")
@@ -1987,13 +1389,7 @@ function StartMatch.Generate(game_data)
 		prompt.ObjectText = "Bush"
 		prompt.HoldDuration = FORAGE.hold_duration
 		prompt.MaxActivationDistance = FORAGE.max_distance
-		-- Standing right on top of the prompt's part still showed nothing
-		-- last test, with color/prompt state both confirmed correct
-		-- server-side -- the remaining likely explanation is the bush's
-		-- OWN other branches/leaves sitting between the camera and
-		-- whichever one part the prompt is parented to, failing the
-		-- default line-of-sight check. A bush being forageable shouldn't
-		-- depend on an unobstructed sightline through its own foliage.
+		-- The bush's own foliage would fail the line-of-sight check.
 		prompt.RequiresLineOfSight = false
 		prompt.Parent = part
 		local foraged = false
@@ -2008,10 +1404,6 @@ function StartMatch.Generate(game_data)
 			highlight:Destroy()
 			local berry_count = math.random(FORAGE.berry_min, FORAGE.berry_max)
 			player_inventory.add_item(triggering_player, FORAGE.item_name, berry_count)
-			-- [found] matches RequestChecker.lua's own convention -- every
-			-- add_item/remove_item call there is immediately followed by
-			-- these two, which are what the inventory UI and carried-weight
-			-- display actually refresh on.
 			inventory_updated:FireClient(triggering_player, player_inventory.player_inventories[triggering_player])
 			player_weight.notify(triggering_player)
 		end)
@@ -2083,13 +1475,8 @@ function StartMatch.Generate(game_data)
 											tree.Parent = workspace
 											collection_service:AddTag(tree, FOREST_FIRE.tag)
 											FOREST_FIRE.trees_seen = FOREST_FIRE.trees_seen + 1
-											-- Algorithm R, k=3: the first 3 trees seen fill the
-											-- reservoir outright; every tree after that has a
-											-- origin_count/trees_seen chance of bumping a
-											-- uniformly-random existing slot out, which keeps the
-											-- final 3 a uniform random sample of every tree placed
-											-- this match, not just a bias toward whichever 3
-											-- happened to spawn last.
+											-- Reservoir sampling: fill the first 3, then each new tree replaces a random
+											-- slot with probability origin_count / trees_seen.
 											if #FOREST_FIRE.origin_trees < FOREST_FIRE.origin_count then
 												table.insert(FOREST_FIRE.origin_trees, tree)
 											else
@@ -2137,11 +1524,7 @@ function StartMatch.Generate(game_data)
 										elseif moisture <= 0.3 and height > (water_level+1) and height < 25 and distance <= wall_flats_start and math.random() < 0.006 then
 											Spawn_Ferns(Vector3.new(x*block_size, height+2, z*block_size))
 										elseif distance > wall_flats_start and height > water_level + 1 and math.random() < RIM_DEAD_DECOR_CHANCE then
-											-- [stated] the spawn rim gets no plants EXCEPT a couple sparse dead
-											-- stumps (mulchfood_list, already the "Dead" folder models) or the
-											-- one dead bush already in bush_list (Dead Bush2) — never the live
-											-- bush, so pick explicitly from mulch + that one dead bush rather
-											-- than the whole bush_list.
+											-- Spawn rim: only dead stumps or the dead bush, never the live bush.
 											local dead_choice
 											if math.random() < 0.5 then
 												dead_choice = mulchfood_list[math.random(#mulchfood_list)]
@@ -2293,15 +1676,11 @@ function StartMatch.Generate(game_data)
 			player.Character:PivotTo(spawns[i].CFrame + Vector3.new(0, 4, 0))
 		end
 	end
-	-- [stated] forest fire event origins -- whichever 3 trees the
-	-- reservoir sampling above landed on, handed off to
-	-- ArenaEventScheduler via game_data the same way every other
-	-- per-match value already crosses that boundary.
+	-- Handed to ForestFireEvent through game_data.
 	game_data.forest_fire_origin_trees = FOREST_FIRE.origin_trees
 end
 local function Countdown_Player_Movement(player, enabled)
 	local walk_speed = 16
-	local sprint_speed = 28
 	local jump_height = 7.2
 	local character = player.Character
 	local humanoid = character:FindFirstChild("Humanoid")

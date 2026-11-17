@@ -1,24 +1,7 @@
--- [stated] "/dev text command... can fly" -- "classic noclip-style fly":
--- full camera-relative flight (WASD moves in whatever direction the
--- camera's facing/strafing, Space/Shift give pure vertical lift/descent),
--- gravity off entirely, but normal collision KEPT (no passing through
--- walls/terrain/buildings) -- per [stated] choice between the two.
---
--- This runs entirely client-side and does NOT wait on anything from the
--- server beyond the on/off toggle itself. Roblox gives a player's own
--- client physics ownership of their own character by default (the same
--- reason ordinary WASD movement already works this way) -- a LocalScript
--- driving a BodyVelocity on your own HumanoidRootPart replicates to the
--- server and every other client exactly like normal movement does, so
--- there's no need to round-trip camera direction/key state to the server
--- and have IT drive the movement.
---
--- humanoid.PlatformStand = true while flying: this stops the Humanoid's
--- own movement/animation state machine from fighting the BodyVelocity
--- (no walk animation churn, no built-in jump/fall handling interfering),
--- but does NOT touch collision -- the character's parts keep their normal
--- CanCollide, so flying into a wall or the ground still stops you, which
--- is exactly the "keep normal collision" behavior asked for.
+-- /dev flight, client-side: WASD moves relative to the camera, Space/Shift move
+-- up/down, gravity off, collision kept. The client owns its character's physics,
+-- so a BodyVelocity here replicates like normal movement. PlatformStand stops the
+-- Humanoid fighting the BodyVelocity.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -68,11 +51,7 @@ local function Update_Velocity()
 	if held_keys[Enum.KeyCode.LeftShift] or held_keys[Enum.KeyCode.RightShift] then
 		vertical -= VERTICAL_SPEED
 	end
-	-- Note: horizontal already includes whatever vertical component the
-	-- camera's own look vector has (looking up while holding W lifts you)
-	-- -- that's intentional, part of "classic noclip-style fly" reading
-	-- the camera directly. Space/Shift's vertical is just added on top of
-	-- that, not a separate axis fighting it.
+	-- Looking up while holding W also climbs; Space/Shift add on top.
 	body_velocity.Velocity = Vector3.new(horizontal.X, horizontal.Y + vertical, horizontal.Z)
 end
 
@@ -134,13 +113,7 @@ dev_fly_toggled.OnClientEvent:Connect(function(enabled)
 	end
 end)
 
--- Dying/respawning tears down the old HumanoidRootPart (and with it, this
--- script's own BodyVelocity) regardless of what the server-side dev mode
--- flag still says -- if dev mode was left on through a death, this re-arms
--- flight on the fresh character instead of silently losing it until the
--- player retypes /dev. A short wait lets the new character's Humanoid/
--- HumanoidRootPart actually finish settling in before Start_Fly looks for
--- them.
+-- Re-arm flight on respawn if dev mode is still on.
 local_player.CharacterAdded:Connect(function()
 	if flying then
 		flying = false -- forces Start_Fly to actually rebuild state below, rather than no-op on its own "already flying" guard

@@ -9,8 +9,8 @@ local SupplyDropEvent = {}
 
 -- Starting guesses — tune once tested.
 local REGULAR_CRATE_COUNT = 3
-local NEAR_PLAYER_MIN_DIST = 40 -- was 20
-local NEAR_PLAYER_MAX_DIST = 120 -- was 60
+local NEAR_PLAYER_MIN_DIST = 40
+local NEAR_PLAYER_MAX_DIST = 120
 local BEACON_PER_PLAYERS = 10 -- one beacon crate per this many alive players
 local BEACON_RARITY = "Elite" -- must exist as a key in CrateData.lua — see note below
 local DROP_HEIGHT = 150 -- studs above ground the crate starts falling from
@@ -48,11 +48,8 @@ local function Get_Alive_Characters(game_data)
 	return characters
 end
 
--- Spawns the crate high above its target spot, disables its ProximityPrompt
--- for the fall's duration, then tweens it straight down to the ground and
--- re-enables the prompt once it lands. Placeholder: once a parachute model
--- exists, weld/parent it onto the crate here, and detach it in the tween's
--- Completed callback alongside re-enabling the prompt.
+-- Drops the crate from high above, prompt disabled until it lands. A parachute
+-- could be attached here and removed on landing.
 local function Drop_Crate(x, ground_y, z, crate)
 	crate:PivotTo(CFrame.new(x, ground_y + DROP_HEIGHT, z))
 	crate.Parent = workspace

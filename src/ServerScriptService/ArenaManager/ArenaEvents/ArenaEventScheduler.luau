@@ -9,9 +9,7 @@ local event_warning = ReplicatedStorage:WaitForChild("EventWarning")
 
 local ArenaEventScheduler = {}
 
--- Shared timing across every pooled event. Fixed schedule for now, but
--- this is the one place that'd change for eventual player-triggered
--- activation later.
+-- Time between events.
 local EVENT_INTERVAL = 120 -- TESTING value
 local WARNING_LONG = 15
 local WARNING_SHORT = 5
@@ -23,33 +21,18 @@ function ArenaEventScheduler.register_event(name, run_function)
 	table.insert(event_pool, {name = name, run = run_function})
 end
 
--- [stated] "the forest fire event cannot trigger as the next event after
--- the flood event" -- Flood's own run (the storm + terrain rise) keeps
--- doing real work in the background (via its own task.spawn inside
--- Run_Event, below) well past the point Run_Event itself returns and the
--- scheduler moves on to its next EVENT_INTERVAL roll, so letting Forest
--- Fire (itself a heavy, thousands-of-trees operation) land right after is
--- what caused "considerable pressure" on a recent test -- the two ended up
--- doing their expensive work at the same time. Tracked as "the last event
--- the scheduler STARTED", not "the last event that finished", since
--- Flood's background work has no way to report back to this module when
--- it's actually done -- Run_Event sets this the moment an event is
--- chosen, not when it returns.
+-- Last event the scheduler started (set at start, since events like Flood keep
+-- working in the background after Run_Event returns).
 local last_event_name = nil
 
--- Name -> set of names that must NOT be picked as the very next event
--- after this one fires. A table (not a single hardcoded `if`) so a future
--- second pairing doesn't mean rewriting the selection logic again.
+-- Event name -> events that may not come right after it (Forest Fire right
+-- after Flood overloaded the server).
 local EVENT_FOLLOW_BANS = {
 	["Flood"] = {["Forest Fire"] = true},
 }
 
--- Builds the actual candidate list for one random pick -- everything in
--- event_pool EXCEPT whatever EVENT_FOLLOW_BANS says can't follow
--- last_event_name. Only used by start()'s own random roll -- force_trigger
--- is an explicit, by-name manual override (see its own comment below), not
--- a random pick, so it deliberately does NOT run its target through this
--- filter.
+-- Event pool minus anything banned after last_event_name. Not used by
+-- force_trigger.
 local function Get_Allowed_Candidates()
 	local banned = last_event_name and EVENT_FOLLOW_BANS[last_event_name]
 	if not banned then
@@ -61,9 +44,7 @@ local function Get_Allowed_Candidates()
 			table.insert(candidates, entry)
 		end
 	end
-	-- If the ban would empty the pool entirely (e.g. only the banned event
-	-- is registered right now), fall back to the full pool rather than
-	-- stalling the scheduler forever on an empty candidate list.
+	-- If the ban empties the pool, use the full pool.
 	if #candidates == 0 then
 		return event_pool
 	end
@@ -93,15 +74,9 @@ local function Freeze_Players(game_data, frozen)
 	end
 end
 
--- The actual warning/freeze/pan/run sequence for one chosen event --
--- pulled out of start()'s own loop body (below) so force_trigger (also
--- below) can run the exact same sequence on demand instead of duplicating
--- it. Takes a pool entry ({name=, run=}), not just a name, since both
--- callers already have one in hand by the time this runs.
+-- Warnings, freeze, camera pan, then the event's run function. Shared by the
+-- scheduler loop and force_trigger.
 local function Run_Event(chosen, game_data)
-	-- Recorded immediately, before the warnings even go out -- see
-	-- last_event_name's own comment above for why this can't wait for
-	-- chosen.run to actually finish.
 	last_event_name = chosen.name
 	Send_Warnings(chosen.name, WARNING_LONG)
 	task.wait(WARNING_LONG - WARNING_SHORT)
@@ -148,20 +123,9 @@ function ArenaEventScheduler.start(game_data)
 	end)
 end
 
--- [stated] "a command to manually launch the forest fire event so I can
--- test it faster than waiting for it to naturally occur" -- looks the
--- event up by the same name register_event was called with, then runs it
--- through the identical warning/freeze/pan/run sequence start()'s own
--- loop uses, just kicked off immediately instead of waiting for the next
--- EVENT_INTERVAL roll. Doesn't touch or reset start()'s own timer -- this
--- is a fully separate, one-off run, safe to call while that loop is also
--- live. Returns true/false so a caller (a chat command, the Studio
--- Command Bar, etc.) can tell whether the name actually matched anything.
--- Deliberately bypasses EVENT_FOLLOW_BANS/Get_Allowed_Candidates -- this
--- is an explicit, by-name override for testing, not a random roll, so a
--- developer asking for Forest Fire by name still gets Forest Fire even
--- right after a Flood. It still updates last_event_name (via Run_Event),
--- so whatever the NEXT automatic roll does still respects the ban.
+-- Runs a named event now through the same sequence (for testing). Ignores
+-- follow-bans and doesn't reset the loop's timer. Returns false if no event has
+-- that name.
 function ArenaEventScheduler.force_trigger(name, game_data)
 	for _, entry in ipairs(event_pool) do
 		if entry.name == name then

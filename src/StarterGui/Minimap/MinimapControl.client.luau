@@ -5,10 +5,7 @@ local run_service = game:GetService("RunService")
 local minimap_upgrade_granted = replicated_storage:WaitForChild("MinimapUpgradeGranted")
 local beacon_crate_spawned = replicated_storage:WaitForChild("BeaconCrateSpawned")
 local beacon_crate_looted = replicated_storage:WaitForChild("BeaconCrateLooted")
--- [stated] "is it possible to add their locations to every player's
--- minimap as a white square icon, thus everyone knows where they are" --
--- same RemoteEvent as AnimalFrenzyEvent.lua's Build_Cure_Station fires,
--- see that file for why there's no corresponding "removed" event.
+-- Cure stations shown as white squares (never removed).
 local cure_station_spawned = replicated_storage:WaitForChild("CureStationSpawned")
 
 local minimap_gui = script.Parent
@@ -90,9 +87,7 @@ minimap_upgrade_granted.OnClientEvent:Connect(function(upgrade_name, snapshot)
 	end
 end)
 
--- Beacon crate marker — visible to everyone regardless of minimap upgrade
--- tier, since its whole purpose is drawing a fight. Uses a distinct
--- reddish-orange so it doesn't compete visually with the yellow player icon.
+-- Beacon crate marker, visible to everyone.
 local BEACON_MARKER_COLOR = Color3.fromRGB(220, 60, 40)
 local beacon_markers = {} -- [crate_instance] = marker_frame
 
@@ -121,13 +116,6 @@ beacon_crate_looted.OnClientEvent:Connect(function(crate_instance)
 	end
 end)
 
--- Cure station marker — [stated] "add their locations to every player's
--- minimap as a white square icon, thus everyone knows where they are" --
--- same Frame-marker pattern as the beacon crate marker above, just white
--- and with no "looted"-style removal handler, since AnimalFrenzyEvent.lua
--- never destroys a cure station once it's placed (Spawn_Cure_Stations only
--- ever runs once per match) -- there's nothing for this to ever need to
--- clear, unlike the beacon crate markers above.
 local CURE_STATION_MARKER_COLOR = Color3.fromRGB(255, 255, 255)
 
 cure_station_spawned.OnClientEvent:Connect(function(station_instance)

@@ -4,34 +4,21 @@ local stamina_updated = ReplicatedStorage:WaitForChild("StaminaUpdated")
 local PlayerHunger = require(script.Parent:WaitForChild("PlayerHunger"))
 local PlayerStats = require(ServerScriptService:WaitForChild("PlayerStats"))
 local PlayerStamina = {}
-PlayerStamina.player_stamina = {} -- [player] = {current, last_spend_time} — max is no longer stored, see get_max
+PlayerStamina.player_stamina = {} -- [player] = {current, last_spend_time}
 local BASE_MAX_STAMINA = 100
--- [stated] "Endurance -> sprint stamina duration" — implemented as a bigger
--- max pool per point rather than a sprint-specific discount, same shape as
--- PlayerWeight's Strength->carry-weight scaling. Placeholder, tune once
--- tested.
+-- Endurance -> bigger max stamina. Placeholder.
 local ENDURANCE_MAX_STAMINA_PER_POINT = 10
 local BASE_REGEN_RATE = 10
 local BASE_REGEN_DELAY = 1
--- [stated] "faster stamina-regen-after-empty recovery" — each Endurance
--- point above 1 shortens the post-spend delay before regen kicks back in.
--- Floored so there's always SOME delay, same shape as PlayerHunger's rate
--- floor.
+-- Endurance -> shorter delay before regen starts (floored).
 local ENDURANCE_REGEN_DELAY_REDUCTION_PER_POINT = 0.05
 local MIN_REGEN_DELAY_FRACTION = 0.4
--- Was flat for every player before the hunger system existed. Well-Fed/
--- Enhanced speed regen up, Hungry/Starving slow it down; PlayerHunger.
--- get_stage_effects defaults to Normal (multiplier 1.0) if this player has
--- no hunger data yet, so this stays safe even if PlayerHunger.new_player
--- hasn't run. regen_tick and the client display both read through this one
--- function so they can never drift out of sync with each other.
+-- Regen rate, scaled by hunger stage. Used by both regen_tick and the client display.
 function PlayerStamina.get_regen_rate(player)
 	local hunger_effects = PlayerHunger.get_stage_effects(player)
 	return BASE_REGEN_RATE * hunger_effects.StaminaRegenMultiplier
 end
--- Max stamina, like PlayerWeight's max carry weight, is derived on demand
--- from Endurance rather than cached — a stat increase takes effect
--- immediately with nothing to keep in sync.
+-- Max stamina from Endurance, computed on demand.
 function PlayerStamina.get_max(player)
 	local endurance = PlayerStats.get(player, "Endurance")
 	return BASE_MAX_STAMINA + (endurance - 1) * ENDURANCE_MAX_STAMINA_PER_POINT
@@ -41,9 +28,8 @@ function PlayerStamina.get_regen_delay(player)
 	local fraction = math.max(MIN_REGEN_DELAY_FRACTION, 1 - (endurance - 1) * ENDURANCE_REGEN_DELAY_REDUCTION_PER_POINT)
 	return BASE_REGEN_DELAY * fraction
 end
--- Centralizes every stamina change through one path, so the client only
--- gets a network update when the displayed (whole-number) value actually
--- changes, rather than on every single Heartbeat tick.
+-- All changes go through here; the client is only updated when the whole
+-- number changes.
 local function Set_Current(player, new_value, data)
 	local max = PlayerStamina.get_max(player)
 	new_value = math.clamp(new_value, 0, max)
@@ -66,12 +52,7 @@ function PlayerStamina.get(player)
 	local data = PlayerStamina.player_stamina[player]
 	return data and data.current or 0
 end
--- Re-pushes current/max/regen to the client without changing anything —
--- mirrors PlayerWeight.notify. Needed now that max stamina depends on
--- Endurance: a Strength/Endurance/Dexterity stim changes what "max" means
--- even when current stamina itself didn't move, so RequestChecker's
--- UseItemRequest handler calls this the same place it already calls
--- PlayerWeight.notify.
+-- Re-sends current/max/regen without changing anything (e.g. after a stat boost).
 function PlayerStamina.notify(player)
 	local data = PlayerStamina.player_stamina[player]
 	if not data then
@@ -79,11 +60,7 @@ function PlayerStamina.notify(player)
 	end
 	stamina_updated:FireClient(player, data.current, PlayerStamina.get_max(player), PlayerStamina.get_regen_rate(player))
 end
--- Instant stamina restore — [stated] drink items give a small immediate
--- refill instead of (or alongside) the smaller hunger relief they give
--- compared to food, so a "refreshing" drink actually feels different from
--- a "filling" meal without needing a whole separate mechanic. Clamped to
--- max the same as every other path through Set_Current.
+-- Instant stamina refill (drinks). Clamped to max.
 function PlayerStamina.restore(player, amount)
 	local data = PlayerStamina.player_stamina[player]
 	if not data then

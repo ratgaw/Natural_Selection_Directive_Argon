@@ -1,31 +1,8 @@
--- Flood arena event: a huge storm (wind that actually pushes players
--- around, rain, and lightning) rolls in over the whole map, and while it's
--- going the sea level smoothly climbs. [stated] "even after the intial
--- rise is down for the rest of the match the water level should be higher
--- than it was when the match started" -- the storm (wind/rain/lightning/
--- darkened sky) is temporary and fully reverts once it passes, but the
--- Terrain water it leaves behind is NOT reverted anywhere in this file --
--- end_storm only cleans up the atmosphere, never the water, so the map
--- stays flooded for the rest of the match exactly as asked.
--- Lives in ServerScriptService > ArenaManager > ArenaEvents, alongside
--- AnimalFrenzyEvent/ForestFireEvent/SupplyDropEvent/ZombieEvent/
--- ArenaEventScheduler, and is registered into the scheduler's pool from
--- ArenaManager.lua (the Script one level up, not a module in this
--- folder) the exact same way those four already are:
--- local flood_event = require(events_folder:WaitForChild("FloodEvent"))
--- arena_event_scheduler.register_event("Flood", flood_event.trigger)
--- ArenaEventScheduler.lua's own Run_Event already does its own
--- Send_Warnings (WARNING_LONG/WARNING_SHORT) and freeze/cinematic-pan
--- sequence BEFORE ever calling chosen.run, so trigger() below doesn't
--- fire its own EventWarning or wait out its own lead-in the way an
--- earlier version of this file did -- that would have doubled up on both.
--- trigger() only ever does real work once per match (see has_flooded
--- below) and returns almost immediately itself -- the storm/rise run in
--- their own background coroutine, so even though Run_Event already calls
--- chosen.run inside its own task.spawn+pcall, this stays safe to call
--- from anywhere (including force_trigger, and ArenaManager.lua's new
--- "/flood" debug chat command) without blocking its caller for the ~100
--- seconds the full sequence takes.
+-- Flood event: a storm (wind that pushes players, rain, lightning, dark sky)
+-- while the water level rises. The storm reverts afterwards; the water stays
+-- for the rest of the match. Warnings and the camera pan are handled by
+-- ArenaEventScheduler before trigger() runs. trigger() returns immediately --
+-- the ~100 s sequence runs in its own thread.
 local Players = game:GetService("Players")
 local Lighting = game:GetService("Lighting")
 local SoundService = game:GetService("SoundService")
@@ -36,35 +13,17 @@ local STORM_RISE_START_DELAY = 10 -- seconds of storm (wind/rain/lightning) befo
 local STORM_RISE_DURATION = 80 -- seconds for the water to climb from the map's lowest sampled point to the target level
 local STORM_TAIL = 10 -- seconds the storm keeps going after the rise finishes, rather than cutting out the instant the water stops
 local STORM_DURATION = STORM_RISE_START_DELAY + STORM_RISE_DURATION + STORM_TAIL
-local FLOOD_LEVEL_ABOVE_AVERAGE = 5 -- [stated] "take the water level to that average - 5"
--- [stated] "take the height of each terrain placed during map generation,
--- find the average" -- rather than reaching into StartMatch.lua's
--- generation-time data (which this file has no access to, and which could
--- be stale against anything that reshapes terrain after generation --
--- roads, settlement flattening, ForestFireEvent, etc.), this samples the
--- ACTUAL current terrain via a grid of straight-down raycasts, same
--- Include-Terrain-only raycast shape AnimalFrenzyEvent.lua's
--- Get_Ground_Height already uses for the cure station obelisks. Same
--- result in spirit ("the average height of the terrain"), but always
--- matches what's really out there right now.
+local FLOOD_LEVEL_ABOVE_AVERAGE = 5 -- target water level = average terrain height - 5
+-- Target height comes from sampling the current terrain with a grid of
+-- downward terrain-only raycasts.
 local SAMPLE_GRID_SPACING = 100 -- studs between each height sample -- finer = more accurate average, more raycasts (~1400 at the default map radius)
--- [stated/found] Studio error "Resolution has to be 4" the first time the
--- flood event actually tried to rise -- unlike FillRegion/FillBlock,
--- ReadVoxels/WriteVoxels don't accept an arbitrary resolution at all; 4
--- studs is the only legal value for either call, full stop. There's no
--- "coarser voxel for water" option here the way the old 32 assumed.
+-- ReadVoxels/WriteVoxels only accept resolution 4.
 local TERRAIN_VOXEL_RESOLUTION = 4
--- With resolution forced to 4 (instead of the old 32), a single
--- ReadVoxels/WriteVoxels call over the WHOLE map width could badly exceed
--- Roblox's per-call voxel limit (community-measured at 4,194,304 voxels --
--- Roblox doesn't document an exact number) depending on map_radius and how
--- thick a given rise step ends up being. Flood_Fill_Slab below chunks the
--- fill into squares sized to stay comfortably under this budget instead,
--- so it stays correct regardless of map size -- this is the replacement
--- for what WATER_FILL_RESOLUTION used to do by being coarse.
+-- Per-call voxel budget (Roblox's limit is roughly 4.2M); Flood_Fill_Slab splits
+-- the map into chunks under this.
 local MAX_VOXELS_PER_TERRAIN_CALL = 3000000
 local STORM_RISE_STEP_INTERVAL = 2 -- seconds between each incremental Terrain fill while the water is climbing
-local WIND_ACCELERATION = 28 -- studs/s^2 -- [stated] "wind effects those be turned up enough that the player has to deal with it some" -- multiplied by each player's own AssemblyMass below so it reads as the same PUSH regardless of a given character's mass, not a fixed raw force
+local WIND_ACCELERATION = 28 -- studs/s^2, scaled by each player's mass
 local WIND_GUST_MIN_STRENGTH = 0.5 -- gusts vary between this and 1.0 of WIND_ACCELERATION, not a constant steady push
 local WIND_GUST_INTERVAL_MIN = 2 -- seconds between picking a new random gust direction/strength
 local WIND_GUST_INTERVAL_MAX = 5
@@ -77,46 +36,28 @@ local RAIN_UPDATE_INTERVAL = 0.2 -- seconds between repositioning rain emitters 
 local RAIN_SOUND_ID = "rbxassetid://0" -- placeholder -- a looping heavy-rain ambience, fill in once picked
 local THUNDER_SOUND_ID = "rbxassetid://0" -- placeholder -- a short thunder crack, fill in once picked
 local RAIN_TEXTURE_ID = "rbxassetid://0" -- placeholder -- a plain white vertical streak decal reads well as falling rain, fill in once picked
--- Darkened-storm look -- snapshotted from whatever Lighting already has
--- and restored exactly once the storm passes (see Start_Storm/End_Storm),
--- same "don't clobber the existing setup, just borrow it for a while"
--- shape AnimalFrenzy's AggroRange boost / end_frenzy revert already uses.
+-- Storm lighting. The previous Lighting values are restored when it ends.
 local STORM_BRIGHTNESS = 1
 local STORM_AMBIENT = Color3.fromRGB(45, 45, 50)
 local STORM_OUTDOOR_AMBIENT = Color3.fromRGB(55, 55, 60)
 local STORM_FOG_COLOR = Color3.fromRGB(120, 120, 130)
 local STORM_FOG_END = 350
--- The flood (storm + permanent water rise) only ever happens once per
--- match -- unlike AnimalFrenzy, there's no "fires more than once" case
--- here, and running the whole sequence twice would just mean a second,
--- redundant rise on top of an already-flooded map. Guards trigger() below
--- the same way AnimalFrenzyEvent.lua's cure_stations_spawned guards
--- Spawn_Cure_Stations against firing twice.
+-- The flood only happens once per match.
 local has_flooded = false
 local storm_active = false
 local wind_direction = Vector3.new(1, 0, 0)
 local wind_strength = 0
--- Per-player bookkeeping for the storm's temporary effects. Keyed by
--- Player (not Character) since a player can die and respawn mid-storm --
--- rain_parts are parented to workspace, not the character, so they
--- survive a respawn unless explicitly cleaned up here; the wind
--- Attachment/VectorForce are parented to the character's
--- HumanoidRootPart instead, so those DO get destroyed automatically the
--- moment that character is removed -- Setup_Storm_Player just needs to
--- recreate them on every CharacterAdded while the storm is still going.
+-- Per-player storm effects, keyed by Player so they survive respawns. Rain
+-- parts live in workspace and need manual cleanup; the wind force lives on the
+-- root part and is recreated on each CharacterAdded.
 local storm_rain_parts = {}
 local storm_character_connections = {}
 local storm_player_added_connection = nil
 local terrain_raycast_params = RaycastParams.new()
 terrain_raycast_params.FilterType = Enum.RaycastFilterType.Include
 terrain_raycast_params.FilterDescendantsInstances = {Terrain}
--- Returns the average AND the minimum of every sampled height -- average
--- becomes the flood's target level (minus FLOOD_LEVEL_BELOW_AVERAGE), and
--- the minimum becomes where the rise visually starts from, so the water
--- climbs up from the map's actual lowest point rather than snapping into
--- existence at the target height. Returns nil, nil if nothing was hit at
--- all (shouldn't happen on a real map, but this file has no visibility
--- into whether Terrain exists yet when it's called).
+-- Returns the average and minimum sampled heights: the target is based on the
+-- average, and the rise starts from the minimum. nil, nil if nothing was hit.
 local function Sample_Average_Terrain_Height(map_radius)
 	local total, count = 0, 0
 	local min_height = math.huge
@@ -139,18 +80,8 @@ local function Sample_Average_Terrain_Height(map_radius)
 	end
 	return total / count, min_height
 end
--- Fills ONLY the thin new slab being exposed this rise step (bottom_y to
--- top_y), and only converts the AIR voxels within it to Water -- existing
--- solid terrain read back as anything else (rock, dirt, whatever) is
--- written back completely unchanged. That's deliberate: a naive
--- Terrain:FillBlock(..., Water) over this same box would overwrite solid
--- ground too, dissolving the base of any hill/mountain whose foot dips
--- below the current water line into water material straight through --
--- reading the existing voxels first and only touching the empty gaps
--- means low ground floods on TOP of its real floor instead of losing it.
--- One ReadVoxels/WriteVoxels call over a single chunk -- pulled out of
--- Flood_Fill_Slab so that function can call it once per chunk instead of
--- once over the whole map width.
+-- Fills one chunk of the new slab, turning only Air voxels into Water so solid
+-- terrain below the water line is kept.
 local function Fill_Voxel_Chunk(min_corner, max_corner)
 	local region = Region3.new(min_corner, max_corner):ExpandToGrid(TERRAIN_VOXEL_RESOLUTION)
 	local materials, occupancies = Terrain:ReadVoxels(region, TERRAIN_VOXEL_RESOLUTION)
@@ -167,15 +98,8 @@ local function Fill_Voxel_Chunk(min_corner, max_corner)
 	end
 	Terrain:WriteVoxels(region, TERRAIN_VOXEL_RESOLUTION, materials, occupancies)
 end
--- Only ever asked to fill the new slab for one rise step at a time (never
--- the whole column down to some arbitrary floor), so the slab itself is
--- always thin -- but its FOOTPRINT is still the whole map, which at a
--- forced 4-stud resolution can run well past Roblox's per-call voxel
--- limit on a large map. Splits that footprint into square chunks sized so
--- each one's own ReadVoxels/WriteVoxels call stays under
--- MAX_VOXELS_PER_TERRAIN_CALL, looping Fill_Voxel_Chunk over however many
--- of those squares it takes to cover the full -map_radius..map_radius
--- extent in both X and Z.
+-- Fills one rise step's slab across the whole map in chunks that each stay
+-- under MAX_VOXELS_PER_TERRAIN_CALL.
 local function Flood_Fill_Slab(map_radius, bottom_y, top_y)
 	local full_width = map_radius * 2
 	local height_cells = math.max(1, math.ceil((top_y - bottom_y) / TERRAIN_VOXEL_RESOLUTION))
@@ -195,18 +119,9 @@ local function Flood_Fill_Slab(map_radius, bottom_y, top_y)
 		end
 	end
 end
--- Climbs from start_level to target_level over STORM_RISE_DURATION
--- seconds, one Flood_Fill_Slab call per STORM_RISE_STEP_INTERVAL seconds --
--- "smoothly rise" here means smoothly in the sense of steady, visible
--- progress over time, not a sub-second-tick animation; real Terrain water
--- (the whole point of using it over a cosmetic rising plane -- players can
--- actually swim in it) doesn't have a cheap way to animate any smoother
--- than incremental fills like this. workspace:SetAttribute("WaterLevel",
--- ...) is kept current throughout and left at the final target forever
--- after -- nothing in this file ever lowers it again -- so anything else
--- that wants to know "how high is the flood right now" (a future swim/
--- drown check, say) has somewhere to read it from without re-sampling
--- Terrain itself.
+-- Raises the water from start_level to target_level in steps over
+-- STORM_RISE_DURATION. workspace's "WaterLevel" attribute tracks the current
+-- level and keeps the final value.
 local function Rise_Water_Over_Time(map_radius, start_level, target_level)
 	local total_rise = target_level - start_level
 	if total_rise <= 0 then
@@ -226,15 +141,8 @@ local function Rise_Water_Over_Time(map_radius, start_level, target_level)
 	end
 	workspace:SetAttribute("FloodHasOccurred", true)
 end
--- One player's temporary storm effects -- a rain emitter following
--- overhead, and a VectorForce on their HumanoidRootPart for the wind to
--- actually push against (the [stated] "real force on players" choice,
--- rather than just the cosmetic workspace.GlobalWind alone -- see
--- Update_Wind_Gust's own comment on why GlobalWind by itself doesn't
--- affect players at all). Called once up front for everyone already in
--- the match, and again from a CharacterAdded connection for the rest of
--- the storm so a mid-storm death/respawn doesn't leave that player
--- suddenly exempt from either effect.
+-- Adds one player's rain emitter and wind VectorForce. Called for everyone at
+-- the start and again on respawn during the storm.
 local function Setup_Storm_Player(player, character)
 	local root = character:FindFirstChild("HumanoidRootPart")
 	if not root then
@@ -250,11 +158,7 @@ local function Setup_Storm_Player(player, character)
 	force.RelativeTo = Enum.ActuatorRelativeTo.World
 	force.Force = Vector3.new(0, 0, 0) -- set for real by Update_Wind_Gust's loop below
 	force.Parent = root
-	-- Old rain part (from a previous character, if this is a respawn) is
-	-- parented to workspace rather than the character, so it survives the
-	-- old character's destruction on its own -- clean it up explicitly
-	-- before making the new one, same reasoning Handle_Death's dead-guard
-	-- gives for not letting cleanup double up.
+	-- Remove the rain part from a previous character before making a new one.
 	local old_rain_part = storm_rain_parts[player]
 	if old_rain_part then
 		old_rain_part:Destroy()
@@ -287,10 +191,7 @@ local function Setup_Storm_Player(player, character)
 	rain_sound:Play()
 	storm_rain_parts[player] = rain_part
 end
--- Reverses Setup_Storm_Player for one player -- destroys their rain part
--- (the only thing that doesn't already clean itself up) and, if their
--- current character is still around, the wind Attachment/VectorForce on
--- it too, so nobody keeps getting blown around after the storm's over.
+-- Removes one player's rain part and wind force.
 local function Teardown_Storm_Player(player)
 	local rain_part = storm_rain_parts[player]
 	if rain_part then
@@ -304,9 +205,7 @@ local function Teardown_Storm_Player(player)
 		wind_attachment:Destroy() -- takes its child VectorForce with it
 	end
 end
--- Keeps every active rain emitter centered over its player as they move --
--- same follow-overhead shape, just X/Z tracking a moving target instead of
--- a fixed point.
+-- Keeps each rain emitter centered over its player.
 local function Update_Rain_Positions()
 	for player, rain_part in pairs(storm_rain_parts) do
 		local character = player.Character
@@ -316,24 +215,10 @@ local function Update_Rain_Positions()
 		end
 	end
 end
--- Picks a new random gust direction/strength and applies it both ways:
--- workspace.GlobalWind for whatever native wind-reactive visuals the map
--- might have (leaves, particles, cloth -- [stated] "if roblox has wind
--- effects those be turned up"), and a real VectorForce push on every
--- active player for the part that actually has to be dealt with. GlobalWind
--- ALONE does not push a Humanoid at all -- it's a purely cosmetic property
--- Roblox's own systems read, never applied as a physical force -- hence
--- needing the VectorForce as its own separate thing rather than relying on
--- GlobalWind to cover both. Force = direction * strength * AssemblyMass so
--- the wind reads as the same ACCELERATION on every player regardless of
--- their own mass, rather than a fixed raw force that would shove a lighter
--- character around far more than a heavier one for no in-fiction reason.
--- [known limitation, not yet confirmed] Humanoid's own walk-to-target
--- movement applies its own corrective force every physics step, which can
--- partially fight/dampen this while a player is actively walking -- the
--- push should still be clearly felt while standing still, swinging, or
--- drifting, but flag it if it reads as weaker than intended once you can
--- feel it in-game; a stronger WIND_ACCELERATION is the first thing to try.
+-- Picks a new gust and applies it twice: workspace.GlobalWind (cosmetic only,
+-- it never pushes players) and a VectorForce on each player scaled by their
+-- mass. Walking Humanoids partly resist the push; raise WIND_ACCELERATION if
+-- it feels too weak.
 local function Update_Wind_Gust()
 	local angle = math.random() * 2 * math.pi
 	wind_direction = Vector3.new(math.cos(angle), 0, math.sin(angle))
@@ -349,13 +234,7 @@ local function Update_Wind_Gust()
 		end
 	end
 end
--- Random sky flashes + thunder, timed together -- [stated] "atmospheric
--- only" per the earlier call on lightning: nothing here can hit or damage
--- a player, it's purely for drama. Brightness is restored to whatever the
--- darkened STORM_BRIGHTNESS currently is (not the pre-storm value -- that
--- only comes back once the whole storm ends, see End_Storm) so a flash
--- reads as a brief spike against the storm's dim baseline rather than a
--- jump back to broad daylight.
+-- Cosmetic lightning flashes with thunder; never damages anyone.
 local function Run_Lightning_Loop(thunder_sound)
 	while storm_active do
 		task.wait(LIGHTNING_INTERVAL_MIN + math.random() * (LIGHTNING_INTERVAL_MAX - LIGHTNING_INTERVAL_MIN))
@@ -370,11 +249,8 @@ local function Run_Lightning_Loop(thunder_sound)
 		end
 	end
 end
--- Starts the temporary half of the event (wind/rain/lightning/darkened
--- sky) for every current and future-joining player, for `duration`
--- seconds, then reverts the atmosphere back to exactly how Lighting looked
--- before this ran. Never touches the water -- that's Rise_Water_Over_Time's
--- job, called separately (and left running after this ends).
+-- Runs the temporary storm for every current and joining player, then restores
+-- the lighting. Doesn't touch the water.
 local function Start_Storm(duration)
 	storm_active = true
 	local original_lighting = {
@@ -444,19 +320,9 @@ local function Start_Storm(duration)
 		storm_character_connections = {}
 	end)
 end
--- [stated] "I now want to add a new event, the flood. This should be a map
--- wide event and even after the intial rise is down for the rest of the
--- match the water level should be higher than it was when the match
--- started... there should be a huge storm with lightning and raining, and
--- then the water level should smoothly rise to a certain point." Runs in
--- its own coroutine (see the module header comment) so calling this
--- doesn't block whatever triggered it for the ~100 seconds the full
--- sequence takes.
+-- Storm, then the water rise. Runs in its own thread.
 local function Run_Flood_Sequence()
-	-- ArenaEventScheduler's own Run_Event has already sent the warnings
-	-- and run the freeze/pan lead-in by the time trigger() (and therefore
-	-- this) ever gets called -- see the module header comment -- so the
-	-- storm starts immediately here with no warning or wait of its own.
+	-- Warnings and lead-in already happened in the scheduler.
 	Start_Storm(STORM_DURATION)
 	local map_radius = workspace:GetAttribute("MapRadius") or 2100
 	local average_height, min_height = Sample_Average_Terrain_Height(map_radius)
