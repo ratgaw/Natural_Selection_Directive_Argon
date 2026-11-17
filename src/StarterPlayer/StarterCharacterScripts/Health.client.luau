@@ -1,0 +1,15 @@
+-- Intentionally empty. Roblox auto-injects its own default "Animate",
+-- "Health", and "Sound" scripts into every spawned character UNLESS a
+-- script with that exact name already exists in StarterCharacterScripts —
+-- which is exactly why the regen kept happening even though this project
+-- has no Health-regen code of its own and StarterCharacterScripts was
+-- empty: Roblox was silently filling the gap with its own default
+-- ~1%-MaxHealth-per-second regen script, invisible in Explorer because it
+-- only gets cloned into the live character at runtime (check a live
+-- character in Workspace during a match — it'd show up there, not here).
+--
+-- This file's only job is to occupy the name "Health" so Roblox skips
+-- that injection. PlayerHunger's Sync_Hunger_Health (RequestChecker.lua)
+-- is meant to be the only thing that ever heals a player now (only during
+-- the Enhanced hunger stage), alongside whatever medkit item eventually
+-- gets built — leave this file empty rather than adding regen logic here.
