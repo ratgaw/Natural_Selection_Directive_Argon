@@ -82,6 +82,23 @@ local function Roll_Weather(exclude)
 	end
 	return exclude or "Clear"
 end
+-- Optional look an arena event layers on top of the current weather (e.g. acid
+-- rain's green fog). Since the Heartbeat below rewrites Lighting every frame,
+-- events must go through set_event_look rather than setting Lighting directly.
+-- Fields: fog_color, fog_start, fog_end, brightness_mult, ambient_mult,
+-- ambient_tint (Color3 multiplied into both ambients), hide_weather_rain.
+local EVENT_LOOK_FADE_SECONDS = 6
+local event_look = nil
+local event_blend = 0 -- 0 = no event look, 1 = fully applied
+local event_blend_target = 0
+function DayNightWeather.set_event_look(look)
+	event_look = look
+	event_blend_target = 1
+end
+-- Fades the event look back out over EVENT_LOOK_FADE_SECONDS.
+function DayNightWeather.clear_event_look()
+	event_blend_target = 0
+end
 -- Rebuilt on every start().
 local state = nil
 local heartbeat_connection = nil
@@ -126,7 +143,8 @@ local function Make_Rain_Follower()
 	return {part = part, emitter = emitter}
 end
 local function Update_Rain_Followers()
-	local is_raining = state.current_weather == "Rain"
+	local event_hides_rain = event_look ~= nil and event_look.hide_weather_rain and event_blend > 0
+	local is_raining = state.current_weather == "Rain" and not event_hides_rain
 	for _, player in ipairs(Players:GetPlayers()) do
 		local character = player.Character
 		local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -156,6 +174,9 @@ function DayNightWeather.stop()
 		Remove_Rain_Follower(player)
 	end
 	state = nil
+	event_look = nil
+	event_blend = 0
+	event_blend_target = 0
 end
 function DayNightWeather.start()
 	DayNightWeather.stop()
@@ -191,6 +212,31 @@ function DayNightWeather.start()
 		local ambient_mult = from_look.ambient_mult + (to_look.ambient_mult - from_look.ambient_mult) * blend
 		local base_ambient = Lerp_Color(DAY_NIGHT.day_ambient, DAY_NIGHT.night_ambient, night_factor)
 		local base_outdoor_ambient = Lerp_Color(DAY_NIGHT.day_outdoor_ambient, DAY_NIGHT.night_outdoor_ambient, night_factor)
+		-- Event look blends in/out on top of the weather.
+		if event_blend ~= event_blend_target then
+			local step = dt / EVENT_LOOK_FADE_SECONDS
+			if event_blend < event_blend_target then
+				event_blend = math.min(event_blend + step, event_blend_target)
+			else
+				event_blend = math.max(event_blend - step, event_blend_target)
+			end
+		end
+		if event_look and event_blend <= 0 and event_blend_target <= 0 then
+			event_look = nil
+		end
+		if event_look and event_blend > 0 then
+			local e = Smooth_Step(event_blend)
+			fog_color = Lerp_Color(fog_color, event_look.fog_color or fog_color, e)
+			fog_start = fog_start + ((event_look.fog_start or fog_start) - fog_start) * e
+			fog_end = fog_end + ((event_look.fog_end or fog_end) - fog_end) * e
+			brightness_mult = brightness_mult + ((event_look.brightness_mult or brightness_mult) - brightness_mult) * e
+			ambient_mult = ambient_mult + ((event_look.ambient_mult or ambient_mult) - ambient_mult) * e
+			if event_look.ambient_tint then
+				local tint = Lerp_Color(Color3.new(1, 1, 1), event_look.ambient_tint, e)
+				base_ambient = Color3.new(base_ambient.R * tint.R, base_ambient.G * tint.G, base_ambient.B * tint.B)
+				base_outdoor_ambient = Color3.new(base_outdoor_ambient.R * tint.R, base_outdoor_ambient.G * tint.G, base_outdoor_ambient.B * tint.B)
+			end
+		end
 		local base_brightness = DAY_NIGHT.day_brightness + (DAY_NIGHT.night_brightness - DAY_NIGHT.day_brightness) * night_factor
 		Lighting.ClockTime = clock_time
 		Lighting.Ambient = Color3.new(base_ambient.R * ambient_mult, base_ambient.G * ambient_mult, base_ambient.B * ambient_mult)

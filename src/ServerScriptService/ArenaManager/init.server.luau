@@ -27,6 +27,7 @@ local supply_drop_event = require(events_folder:WaitForChild("SupplyDropEvent"))
 local animal_frenzy_event = require(events_folder:WaitForChild("AnimalFrenzyEvent"))
 local forest_fire_event = require(events_folder:WaitForChild("ForestFireEvent"))
 local flood_event = require(events_folder:WaitForChild("FloodEvent"))
+local acid_rain_event = require(events_folder:WaitForChild("AcidRainEvent"))
 local arena_event_scheduler = require(events_folder:WaitForChild("ArenaEventScheduler"))
 -- Fall damage beyond SAFE distance scales linearly; Endurance reduces it.
 -- Placeholders.
@@ -41,6 +42,7 @@ arena_event_scheduler.register_event("Supply Drop", supply_drop_event.trigger)
 arena_event_scheduler.register_event("Animal Frenzy", animal_frenzy_event.trigger)
 arena_event_scheduler.register_event("Forest Fire", forest_fire_event.trigger)
 arena_event_scheduler.register_event("Flood", flood_event.trigger)
+arena_event_scheduler.register_event("Acid Rain", acid_rain_event.trigger)
 -- TESTING ONLY chat commands. Keys have no leading "/" (it's stripped from the
 -- message, since pressing / to open chat may or may not include it). Uses the
 -- legacy Player.Chatted signal; switch to TextChatService if that stops firing.
@@ -78,6 +80,12 @@ local DEBUG_COMMANDS = {
 		local found = arena_event_scheduler.force_trigger("Flood", game_data)
 		if not found then
 			warn("[ArenaManager] /flood: no event registered under the exact name 'Flood'")
+		end
+	end,
+	acidrain = function(player)
+		local found = arena_event_scheduler.force_trigger("Acid Rain", game_data)
+		if not found then
+			warn("[ArenaManager] /acidrain: no event registered under the exact name 'Acid Rain'")
 		end
 	end,
 	dev = function(player)
