@@ -103,14 +103,13 @@ local function Run_Event(chosen, game_data)
 	-- last_event_name's own comment above for why this can't wait for
 	-- chosen.run to actually finish.
 	last_event_name = chosen.name
-	print("[ForestFireDebug] Run_Event: starting warning sequence for '" .. chosen.name .. "', game_data.state=" .. tostring(game_data.state))
 	Send_Warnings(chosen.name, WARNING_LONG)
 	task.wait(WARNING_LONG - WARNING_SHORT)
 	Send_Warnings(chosen.name, WARNING_SHORT)
 	task.wait(WARNING_SHORT)
 
 	if game_data.state ~= "matchinprogress" then
-		warn("[ForestFireDebug] Run_Event: '" .. chosen.name .. "' aborted after warnings -- game_data.state is '" .. tostring(game_data.state) .. "', not 'matchinprogress', so chosen.run was NEVER called")
+		warn("[ArenaEventScheduler] Run_Event: '" .. chosen.name .. "' aborted after warnings -- game_data.state is '" .. tostring(game_data.state) .. "', not 'matchinprogress', so chosen.run was never called")
 		return
 	end
 
@@ -120,12 +119,9 @@ local function Run_Event(chosen, game_data)
 	Freeze_Players(game_data, true)
 
 	task.spawn(function()
-		print("[ForestFireDebug] Run_Event: calling chosen.run for '" .. chosen.name .. "' now")
 		local ok, err = pcall(chosen.run, game_data)
 		if not ok then
 			warn("Event '" .. chosen.name .. "' failed to run:", err)
-		else
-			print("[ForestFireDebug] Run_Event: '" .. chosen.name .. "'.run returned successfully (no error) -- this only means it didn't throw, not that it did anything visible")
 		end
 	end)
 

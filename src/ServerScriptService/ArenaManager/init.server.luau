@@ -123,9 +123,10 @@ task.spawn(function()
 end)
 local DEBUG_COMMANDS = {
 	forestfire = function(player)
-		print("[ForestFireDebug] /forestfire command received from " .. player.Name .. ", game_data.state=" .. tostring(game_data.state) .. ", origin trees on game_data: " .. tostring(game_data.forest_fire_origin_trees and #game_data.forest_fire_origin_trees or "nil"))
 		local found = arena_event_scheduler.force_trigger("Forest Fire", game_data)
-		print("[ForestFireDebug] force_trigger('Forest Fire') returned: " .. tostring(found) .. " (false means no event was registered under that exact name)")
+		if not found then
+			warn("[ArenaManager] /forestfire: no event registered under the exact name 'Forest Fire'")
+		end
 	end,
 	-- [stated] "a / text command for both the animal frenzy event and the
 	-- zombie event so I can manually trigger them for testing" -- same
@@ -134,22 +135,25 @@ local DEBUG_COMMANDS = {
 	-- spelled them further up ("Zombies", "Animal Frenzy") -- force_trigger
 	-- matches by that exact string, so these have to agree with it.
 	zombies = function(player)
-		print("[ArenaManager DEBUG] /zombies command received from " .. player.Name .. ", game_data.state=" .. tostring(game_data.state))
 		local found = arena_event_scheduler.force_trigger("Zombies", game_data)
-		print("[ArenaManager DEBUG] force_trigger('Zombies') returned: " .. tostring(found) .. " (false means no event was registered under that exact name)")
+		if not found then
+			warn("[ArenaManager] /zombies: no event registered under the exact name 'Zombies'")
+		end
 	end,
 	animalfrenzy = function(player)
-		print("[ArenaManager DEBUG] /animalfrenzy command received from " .. player.Name .. ", game_data.state=" .. tostring(game_data.state))
 		local found = arena_event_scheduler.force_trigger("Animal Frenzy", game_data)
-		print("[ArenaManager DEBUG] force_trigger('Animal Frenzy') returned: " .. tostring(found) .. " (false means no event was registered under that exact name)")
+		if not found then
+			warn("[ArenaManager] /animalfrenzy: no event registered under the exact name 'Animal Frenzy'")
+		end
 	end,
 	-- [stated] same "test it faster than waiting for it to naturally occur"
 	-- need as the three above, now that Flood is registered -- matches
 	-- "Flood" exactly as spelled in the register_event call further up.
 	flood = function(player)
-		print("[ArenaManager DEBUG] /flood command received from " .. player.Name .. ", game_data.state=" .. tostring(game_data.state))
 		local found = arena_event_scheduler.force_trigger("Flood", game_data)
-		print("[ArenaManager DEBUG] force_trigger('Flood') returned: " .. tostring(found) .. " (false means no event was registered under that exact name)")
+		if not found then
+			warn("[ArenaManager] /flood: no event registered under the exact name 'Flood'")
+		end
 	end,
 	dev = function(player)
 		Set_Dev_Mode(player, not dev_mode_players[player])

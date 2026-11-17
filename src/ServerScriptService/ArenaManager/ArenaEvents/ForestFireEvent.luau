@@ -302,38 +302,13 @@ local function Char_Tree(tree_model)
 	if leaves then
 		leaves:Destroy()
 	else
-		warn("[ForestFireDebug] Char_Tree: no 'Leaves' child found on " .. tree_model:GetFullName() .. " -- nothing to delete, tree won't visibly lose its leaves")
+		warn("[ForestFireEvent] Char_Tree: no 'Leaves' child found on " .. tree_model:GetFullName() .. " -- nothing to delete, tree won't visibly lose its leaves")
 	end
 	local trunk = tree_model:FindFirstChild("Trunk")
 	if trunk then
-		print("[ForestFireDebug] Char_Tree: trunk on " .. tree_model:GetFullName() .. " is a " .. trunk.ClassName)
-		-- [stated] "some of the trees aren't blackening and my best guess is
-		-- the alpine tree models which are different in that their trunks
-		-- don't have a surface appearance which may be how changing their
-		-- color is silently failing" -- worth checking directly rather than
-		-- assuming: a MeshPart WITHOUT a SurfaceAppearance should still
-		-- darken from .Color (SurfaceAppearance is specifically what makes
-		-- Color get ignored -- no SurfaceAppearance means Color should
-		-- apply normally), so "no SurfaceAppearance" shouldn't actually
-		-- explain a blackening failure by itself. Logging Size/Material/
-		-- Transparency/Reflectance (and MeshId/TextureID if it's a
-		-- MeshPart) here so the next test's Output log can show what's
-		-- actually different about the trees that don't visibly char,
-		-- rather than guessing further.
-		if trunk:IsA("BasePart") then
-			local mesh_info = ""
-			if trunk:IsA("MeshPart") then
-				mesh_info = (", MeshId=%s, TextureID=%s"):format(tostring(trunk.MeshId), tostring(trunk.TextureID))
-			end
-			print(("[ForestFireDebug] Char_Tree: trunk details -- Size=%s, Material=%s, Transparency=%s, Reflectance=%s%s"):format(tostring(trunk.Size), tostring(trunk.Material), tostring(trunk.Transparency), tostring(trunk.Reflectance), mesh_info))
-		end
-		local surface_appearances_removed, base_parts_colored, decals_tinted = Char_Parts(trunk, CHAR_COLOR)
-		print(("[ForestFireDebug] Char_Tree: trunk recolor -- %d SurfaceAppearance removed, %d BasePart(s) colored, %d Decal/Texture tinted"):format(surface_appearances_removed, base_parts_colored, decals_tinted))
-		if surface_appearances_removed > 0 then
-			print("[ForestFireDebug] Char_Tree: this tree HAD a SurfaceAppearance (PBR material) that would have silently ignored .Color -- removing it is what should finally make the trunk visibly blacken")
-		end
+		Char_Parts(trunk, CHAR_COLOR)
 	else
-		warn("[ForestFireDebug] Char_Tree: no 'Trunk' child found on " .. tree_model:GetFullName() .. " -- nothing to blacken, tree won't visibly char")
+		warn("[ForestFireEvent] Char_Tree: no 'Trunk' child found on " .. tree_model:GetFullName() .. " -- nothing to blacken, tree won't visibly char")
 	end
 end
 
@@ -386,7 +361,7 @@ local function Compute_Base_Position(tree_model)
 	if result then
 		return result.Position
 	end
-	warn("[ForestFireDebug] Compute_Base_Position: ground raycast MISSED above " .. tree_model:GetFullName() .. " at X=" .. tostring(pivot_position.X) .. " Z=" .. tostring(pivot_position.Z) .. " -- falling back to the model's own pivot position, which may be unreliable for this tree type")
+	warn("[ForestFireEvent] Compute_Base_Position: ground raycast MISSED above " .. tree_model:GetFullName() .. " at X=" .. tostring(pivot_position.X) .. " Z=" .. tostring(pivot_position.Z) .. " -- falling back to the model's own pivot position, which may be unreliable for this tree type")
 	return pivot_position
 end
 
@@ -477,8 +452,7 @@ end
 
 local function Char_Rock(rock_model)
 	local color = Random_Rock_Char_Color()
-	local surface_appearances_removed, base_parts_colored, decals_tinted = Char_Parts(rock_model, color)
-	print(("[ForestFireDebug] Char_Rock: %s recolored to %s -- %d SurfaceAppearance removed, %d BasePart(s) colored, %d Decal/Texture tinted"):format(rock_model:GetFullName(), tostring(color), surface_appearances_removed, base_parts_colored, decals_tinted))
+	Char_Parts(rock_model, color)
 end
 
 -- Same find-everything-overlapping-the-box approach as
@@ -526,7 +500,7 @@ local function Add_Random_Ground_Fire(ground_position)
 	local result = workspace:Raycast(probe_origin, Vector3.new(0, -GROUND_RAYCAST_DISTANCE, 0), terrain_raycast_params)
 	local spawn_position = result and result.Position or ground_position
 	if not result then
-		warn("[ForestFireDebug] Add_Random_Ground_Fire: ground raycast MISSED near " .. tostring(ground_position) .. " -- falling back to the scorch mark's own center position")
+		warn("[ForestFireEvent] Add_Random_Ground_Fire: ground raycast MISSED near " .. tostring(ground_position) .. " -- falling back to the scorch mark's own center position")
 	end
 	local anchor = Instance.new("Part")
 	anchor.Name = "ForestFireGroundAnchor"
@@ -562,7 +536,6 @@ local function Add_Random_Ground_Fire(ground_position)
 	smoke.Size = fire_size * SMOKE_SIZE_MULTIPLIER
 	smoke.Parent = anchor
 	Schedule_Fire_Extinguish(anchor)
-	print(("[ForestFireDebug] Add_Random_Ground_Fire: spawned standalone Fire(Size=%d)+Smoke at %s, will self-extinguish in %d-%ds"):format(fire_size, tostring(spawn_position), FIRE_EXTINGUISH_MIN_TIME, FIRE_EXTINGUISH_MAX_TIME))
 end
 
 -- ground_position is now ALREADY a verified ground-raycast hit (Compute_Base_Position
@@ -575,7 +548,6 @@ local function Add_Scorch_Mark(tree_model, ground_position)
 		Vector3.new(ground_position.X + SCORCH_RADIUS, ground_position.Y + SCORCH_VERTICAL_MARGIN, ground_position.Z + SCORCH_RADIUS)
 	):ExpandToGrid(VOXEL_RESOLUTION)
 	local materials, occupancies = Terrain:ReadVoxels(region, VOXEL_RESOLUTION)
-	local recolored = 0
 	for x = 1, materials.Size.X do
 		for y = 1, materials.Size.Y do
 			for z = 1, materials.Size.Z do
@@ -584,16 +556,14 @@ local function Add_Scorch_Mark(tree_model, ground_position)
 				-- keeps this from ever adding a bulge above the surface.
 				if occupancies[x][y][z] > 0 then
 					materials[x][y][z] = SCORCH_MATERIAL
-					recolored += 1
 				end
 			end
 		end
 	end
 	Terrain:WriteVoxels(region, VOXEL_RESOLUTION, materials, occupancies)
 	local region_size = Vector3.new(SCORCH_RADIUS * 2, SCORCH_VERTICAL_MARGIN * 2, SCORCH_RADIUS * 2)
-	local removed_plant_count = Remove_Plants_In_Region(ground_position, region_size)
-	local charred_rock_count = Char_Rocks_In_Region(ground_position, region_size)
-	print(("[ForestFireDebug] Add_Scorch_Mark: recolored %d solid voxel cell(s) to %s within a %dx%dx%d region centered near %s, removed %d plant(s), charred %d rock(s)"):format(recolored, tostring(SCORCH_MATERIAL), SCORCH_RADIUS * 2, SCORCH_VERTICAL_MARGIN * 2, SCORCH_RADIUS * 2, tostring(ground_position), removed_plant_count, charred_rock_count))
+	Remove_Plants_In_Region(ground_position, region_size)
+	Char_Rocks_In_Region(ground_position, region_size)
 	Add_Random_Ground_Fire(ground_position)
 end
 
@@ -625,7 +595,7 @@ local function Add_Second_Fire_Effect(tree_model)
 	local origin = Vector3.new(pivot_position.X, GROUND_RAYCAST_START_HEIGHT, pivot_position.Z)
 	local result = workspace:Raycast(origin, Vector3.new(0, -GROUND_RAYCAST_DISTANCE, 0), tree_only_params)
 	if not result then
-		warn("[ForestFireDebug] Add_Second_Fire_Effect: raycast never hit " .. tree_model:GetFullName() .. "'s own geometry from above -- skipping the second fire for this tree")
+		warn("[ForestFireEvent] Add_Second_Fire_Effect: raycast never hit " .. tree_model:GetFullName() .. "'s own geometry from above -- skipping the second fire for this tree")
 		return
 	end
 	local drop = math.random(TREE_SECOND_FIRE_MIN_DROP, TREE_SECOND_FIRE_MAX_DROP)
@@ -663,7 +633,6 @@ local function Add_Second_Fire_Effect(tree_model)
 	smoke.Size = fire_size * SMOKE_SIZE_MULTIPLIER
 	smoke.Parent = anchor
 	Schedule_Fire_Extinguish(anchor)
-	print(("[ForestFireDebug] Add_Second_Fire_Effect: attached second Fire(Size=%d)+Smoke %d studs below the tree-hit raycast at %s on %s, will self-extinguish in %d-%ds"):format(fire_size, drop, tostring(fire_position), tree_model:GetFullName(), FIRE_EXTINGUISH_MIN_TIME, FIRE_EXTINGUISH_MAX_TIME))
 end
 
 local function Add_Fire_Effect(tree_model)
@@ -705,7 +674,6 @@ local function Add_Fire_Effect(tree_model)
 	-- tree's OnFire/burning_trees/damage/spread state ends, so its timer is
 	-- rolled and scheduled there instead, where burning_trees is actually
 	-- in scope.
-	print(("[ForestFireDebug] Add_Fire_Effect: attached Fire(Size=%d)+PointLight+Smoke to base anchor at %s on %s"):format(FIRE_SIZE, tostring(base_position), tree_model:GetFullName()))
 	Add_Scorch_Mark(tree_model, base_position)
 	Add_Second_Fire_Effect(tree_model)
 end
@@ -839,13 +807,11 @@ end
 -- operates on the shared burning_trees set regardless of how many fires
 -- it started from, so nothing past this point needed to change for that.
 function ForestFireEvent.trigger(game_data)
-	print("[ForestFireDebug] ForestFireEvent.trigger called")
 	local origin_trees = game_data.forest_fire_origin_trees
 	if not origin_trees or #origin_trees == 0 then
 		warn("[ForestFireEvent] no forest_fire_origin_trees on game_data -- StartMatch never picked any trees to start the fire from this match, skipping")
 		return
 	end
-	print(("[ForestFireDebug] trigger: %d origin tree(s) on game_data"):format(#origin_trees))
 
 	local burning_trees = {} -- tree_model = true, while OnFire this match
 
@@ -872,12 +838,11 @@ function ForestFireEvent.trigger(game_data)
 		tree_model:SetAttribute("Burnt", true)
 		Remove_Fire_Effect(tree_model)
 		burning_trees[tree_model] = nil
-		print(("[ForestFireDebug] Extinguish_Tree: %s's fire burned out -- marked Burnt, damage/spread from this tree stop now"):format(tree_model:GetFullName()))
 	end
 
 	local function Ignite(tree_model)
 		if not tree_model.Parent then
-			warn("[ForestFireDebug] Ignite: tree_model has no Parent (already destroyed/unparented), skipping ignition")
+			warn("[ForestFireEvent] Ignite: tree_model has no Parent (already destroyed/unparented), skipping ignition")
 			return
 		end
 		tree_model:SetAttribute("OnFire", true)
@@ -887,14 +852,13 @@ function ForestFireEvent.trigger(game_data)
 		burning_trees[tree_model] = true
 		local burn_time = math.random(FIRE_EXTINGUISH_MIN_TIME, FIRE_EXTINGUISH_MAX_TIME)
 		task.delay(burn_time, Extinguish_Tree, tree_model)
-		print(("[ForestFireDebug] Ignited %s at %s, will burn for %ds"):format(tree_model:GetFullName(), tostring(tree_model:GetPivot().Position), burn_time))
 	end
 
 	for i, origin_tree in ipairs(origin_trees) do
 		if origin_tree and origin_tree.Parent then
 			Ignite(origin_tree)
 		else
-			warn(("[ForestFireDebug] origin tree #%d invalid at trigger time (nil or no Parent)"):format(i))
+			warn(("[ForestFireEvent] origin tree #%d invalid at trigger time (nil or no Parent)"):format(i))
 		end
 	end
 	if not next(burning_trees) then
@@ -906,16 +870,12 @@ function ForestFireEvent.trigger(game_data)
 		local newly_ignited = {}
 		local seen_this_tick = {}
 		local ignited_this_tick = 0
-		local burning_count = 0
-		local candidates_seen = 0
 		for tree_model in pairs(burning_trees) do
-			burning_count += 1
 			if ignited_this_tick >= MAX_IGNITIONS_PER_TICK then
 				continue
 			end
 			local position = tree_model:GetPivot().Position
 			local nearby = Find_Nearby_Unburnt_Trees(position)
-			candidates_seen += #nearby
 			for _, candidate in ipairs(nearby) do
 				if ignited_this_tick >= MAX_IGNITIONS_PER_TICK then
 					break
@@ -927,7 +887,6 @@ function ForestFireEvent.trigger(game_data)
 				end
 			end
 		end
-		print(("[ForestFireDebug] Spread_Tick: %d burning tree(s), %d nearby unburnt candidate(s) found (within %d studs), %d newly ignited this tick"):format(burning_count, candidates_seen, SPREAD_RADIUS, #newly_ignited))
 		-- Staged and applied only after the burning_trees scan above
 		-- finishes -- inserting new keys into burning_trees mid-pairs()-
 		-- iteration is undefined behavior in Lua.
@@ -962,7 +921,6 @@ function ForestFireEvent.trigger(game_data)
 	end
 
 	task.spawn(function()
-		print(("[ForestFireDebug] burn loop starting, game_data.state=%s, will run up to %d seconds"):format(tostring(game_data.state), ACTIVE_BURN_DURATION))
 		local burn_until = os.clock() + ACTIVE_BURN_DURATION
 		local tick_count = 0
 		while os.clock() < burn_until and game_data.state == "matchinprogress" do
@@ -999,12 +957,9 @@ function ForestFireEvent.trigger(game_data)
 		-- burning_trees to begin with -- CollectionService's tag is what
 		-- lets this find and clean up every one of them in one pass instead
 		-- of threading a tracking table through Add_Scorch_Mark's caller.
-		local ground_fires_removed = 0
 		for _, ground_fire_anchor in ipairs(CollectionService:GetTagged(GROUND_FIRE_TAG)) do
 			ground_fire_anchor:Destroy()
-			ground_fires_removed += 1
 		end
-		print(("[ForestFireDebug] burn loop ended, all remaining OnFire trees marked Burnt and had their flame effect(s) removed, %d standalone ground fire(s) removed"):format(ground_fires_removed))
 	end)
 end
 

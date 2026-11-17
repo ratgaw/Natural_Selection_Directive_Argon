@@ -869,13 +869,13 @@ local function Run_Animal_AI(entry)
 						-- actually prints, entry.frenzied is somehow false on an
 						-- infected entry — real bug to chase from here.
 						if entry.infected then
-							warn("[AnimalFrenzy DEBUG]", model.Name, "is INFECTED but fell through to Flee_Tick (conditional/not-provoked branch) — entry.frenzied =", tostring(entry.frenzied))
+							warn("[WildLifeManager]", model.Name, "is INFECTED but fell through to Flee_Tick (conditional/not-provoked branch) — entry.frenzied =", tostring(entry.frenzied))
 						end
 						Flee_Or_Wander(root, entry.stats, entry.ai_state)
 					end
 				else
 					if entry.infected then
-						warn("[AnimalFrenzy DEBUG]", model.Name, "is INFECTED but fell through to Flee_Tick (plain-flee branch) — entry.frenzied =", tostring(entry.frenzied))
+						warn("[WildLifeManager]", model.Name, "is INFECTED but fell through to Flee_Tick (plain-flee branch) — entry.frenzied =", tostring(entry.frenzied))
 					end
 					Flee_Or_Wander(root, entry.stats, entry.ai_state)
 				end

@@ -169,17 +169,6 @@ local function Attach_Armor(character, armor_template, piece_names)
 				local offset = reference_limb.CFrame:ToObjectSpace(source_piece.CFrame)
 				local offset_rotation = offset - offset.Position
 				local scaled_offset = CFrame.new(offset.Position * scale) * offset_rotation
-				-- [debug] temporary tripwire for the "arm textures break only
-				-- in Play mode" report -- prints the actual scale factor and
-				-- both limb sizes for every attached piece, so we can see
-				-- whether it's a wildly non-uniform stretch (UV distortion),
-				-- a near-1.0 scale that still lands wrong (points at the
-				-- offset/position math instead), or something else. Remove
-				-- once the cause is confirmed.
-				print(("[ArmorDebug] %s: scale=(%.2f, %.2f, %.2f) reference_limb.Size=%s real_limb.Size=%s piece.Size(before)=%s"):format(
-					source_piece.Name, scale.X, scale.Y, scale.Z,
-					tostring(reference_limb.Size), tostring(real_limb.Size), tostring(source_piece.Size)
-					))
 				piece.Size = piece.Size * scale
 				piece.CFrame = real_limb.CFrame * scaled_offset
 				piece.Anchored = false

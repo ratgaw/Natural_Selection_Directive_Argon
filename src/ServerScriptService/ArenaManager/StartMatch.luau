@@ -1922,19 +1922,6 @@ function StartMatch.Generate(game_data)
 		-- "reverts to normal" is just destroying the overlay.
 		highlight_color = Color3.fromRGB(200, 30, 30),
 	}
-	-- [SettlementDebug]-style temporary counter -- see the summary print
-	-- right after the terrain/decoration loop below. Safe to delete both
-	-- once forageable bushes are confirmed showing up in Studio.
-	local forageable_bush_count = 0
-	-- 964 forageable bushes got tagged last run but none were spotted in
-	-- Studio -- that count proves the server-side logic (chance roll, part
-	-- lookup, tint, prompt creation) IS running, so this is narrowing down
-	-- whether it's "never walked within 10 studs of one of the 964 across
-	-- a 700-stud map (bushes don't spawn near settlements at all, so
-	-- nothing shows up if you stayed near spawn)" vs. an actual rendering
-	-- bug. Printing exact world positions for the first few lets you
-	-- teleport/walk straight to a KNOWN one instead of searching blind.
-	local FORAGE_SAMPLE_PRINT_LIMIT = 5
 	-- Bush clones can be a bare MeshPart/Part (no Model wrapper -- same
 	-- case Anchor_Model/Measure_Building already handle) or a Model, so a
 	-- ProximityPrompt needs a BasePart found either way before it can be
@@ -1994,7 +1981,6 @@ function StartMatch.Generate(game_data)
 		-- limits the glow to one leaf cluster rather than the whole model.
 		highlight.Adornee = part
 		highlight.Parent = bush_instance
-		forageable_bush_count += 1
 		local prompt = Instance.new("ProximityPrompt")
 		prompt.Name = "ForagePrompt"
 		prompt.ActionText = "Forage"
@@ -2010,25 +1996,6 @@ function StartMatch.Generate(game_data)
 		-- depend on an unobstructed sightline through its own foliage.
 		prompt.RequiresLineOfSight = false
 		prompt.Parent = part
-		-- Color/highlight state confirmed correct server-side last round;
-		-- keeping PromptShown/PromptHidden for one more test to confirm
-		-- RequiresLineOfSight=false actually fixes the no-interaction
-		-- issue. Safe to delete once confirmed working.
-		if forageable_bush_count <= FORAGE_SAMPLE_PRINT_LIMIT then
-			local sample_index = forageable_bush_count
-			print(("[Forage] sample #%d | bush=%s | part=%s | pos=%s"):format(
-				sample_index,
-				bush_instance:GetFullName(),
-				part.Name,
-				tostring(part.Position)
-				))
-			prompt.PromptShown:Connect(function()
-				print(("[Forage] sample #%d: PromptShown"):format(sample_index))
-			end)
-			prompt.PromptHidden:Connect(function()
-				print(("[Forage] sample #%d: PromptHidden"):format(sample_index))
-			end)
-		end
 		local foraged = false
 		prompt.Triggered:Connect(function(triggering_player)
 			-- Guards against a double-grant from a trigger landing twice
@@ -2245,12 +2212,6 @@ function StartMatch.Generate(game_data)
 			end
 		end
 	end
-	-- Temporary, same as the forageable_bush_count counter above -- tells
-	-- you right in the output how many bushes this match actually made
-	-- forageable, since that number isn't otherwise visible without
-	-- walking the whole map. Delete both once you've confirmed it's
-	-- working and happy with the count.
-	print(("[Forage] %d bushes made forageable this match"):format(forageable_bush_count))
 	local snapshot_resolution = 40
 	local snapshot_cells = {}
 	for i = 1, snapshot_resolution + 1 do
@@ -2337,16 +2298,6 @@ function StartMatch.Generate(game_data)
 	-- ArenaEventScheduler via game_data the same way every other
 	-- per-match value already crosses that boundary.
 	game_data.forest_fire_origin_trees = FOREST_FIRE.origin_trees
-	-- [stated] "make some test prints so we can try to diagnose this
-	-- issue" -- confirms trees actually spawned and the reservoir sample
-	-- actually landed on something, plus prints exact world positions so
-	-- you can fly/teleport straight to a known origin instead of
-	-- searching a huge map by eye. Safe to delete once the fire is
-	-- confirmed visibly starting.
-	print(("[ForestFireDebug] StartMatch: %d trees spawned this match, %d origin tree(s) selected"):format(FOREST_FIRE.trees_seen, #FOREST_FIRE.origin_trees))
-	for i, origin_tree in ipairs(FOREST_FIRE.origin_trees) do
-		print(("[ForestFireDebug]   origin #%d: %s at %s"):format(i, origin_tree:GetFullName(), tostring(origin_tree:GetPivot().Position)))
-	end
 end
 local function Countdown_Player_Movement(player, enabled)
 	local walk_speed = 16

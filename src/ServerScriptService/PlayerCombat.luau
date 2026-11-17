@@ -1328,12 +1328,6 @@ local MOVEMENT_TRACK_PRIORITIES = {
 	[Enum.AnimationPriority.Movement] = true,
 	[Enum.AnimationPriority.Core] = true,
 }
--- [debug] "walk still too fast under weight" -- temporary, throttled
--- (~2/second per humanoid) print confirming the real sprint state being
--- read and the multiplier it picked, alongside each active track's raw
--- phase/weight, so a wrong PlayerSprint reading is distinguishable from
--- the multiplier value itself still being off. Remove once confirmed.
-local last_phase_debug = {}
 local function Get_Blended_Movement_Phase(player, humanoid, walk_phase_multiplier, run_phase_multiplier)
 	local raw_tracks = humanoid:GetPlayingAnimationTracks()
 	local active_tracks = {}
@@ -1364,23 +1358,6 @@ local function Get_Blended_Movement_Phase(player, humanoid, walk_phase_multiplie
 		blended_angle = blended_angle + 2 * math.pi
 	end
 	local result_phase = blended_angle / (2 * math.pi)
-	-- [debug] see comment above local last_phase_debug -- remove once confirmed.
-	if os.clock() - (last_phase_debug[humanoid] or 0) >= 0.5 then
-		last_phase_debug[humanoid] = os.clock()
-		local parts = {}
-		for _, track in ipairs(active_tracks) do
-			local anim_id = track.Animation and track.Animation.AnimationId
-			local raw_phase = (track.TimePosition % track.Length) / track.Length
-			table.insert(parts, string.format(
-				"[id=%s speed=%.2f weight=%.2f raw_phase=%.2f]",
-				tostring(anim_id), track.Speed, track.WeightCurrent, raw_phase
-				))
-		end
-		print(string.format(
-			"[PlayerCombat DEBUG] %s -- is_sprinting=%s multiplier=%.2f -- %d active movement track(s): %s -- blended phase: %.3f",
-			humanoid.Parent and humanoid.Parent.Name or "?", tostring(is_sprinting), multiplier, #active_tracks, table.concat(parts, " "), result_phase
-			))
-	end
 	return result_phase
 end
 -- [stated, forum-sourced] "setting your upper body track's speed to 0 and
@@ -1392,16 +1369,6 @@ end
 -- clip and the default leg track run different real-time durations. Gated
 -- on active_hold_track so the per-frame cost is only paid while Move is
 -- actually the visible pose, not e.g. while Idle or Block are showing.
--- [debug] "walk still too fast with weight on, fine at no weight, sprint
--- fine either way" -- throttled print confirming whether tracks.Move.Speed
--- is actually staying pinned at 0.00 under this specific weighted-walk
--- condition (the AdjustSpeed(0) reassertion fix above should guarantee
--- this -- if it's ever nonzero here, that fix isn't fully holding and the
--- track is drifting under its own clock between Heartbeat corrections,
--- same mechanism as before but apparently still slipping through somehow).
--- Also shows the real TimePosition/Length being written, to rule that
--- part out separately from the phase math itself. Remove once root-caused.
-local last_sync_debug = {}
 local function Start_Move_Sync(player, humanoid, tracks, walk_phase_multiplier, run_phase_multiplier)
 	if move_sync_connections[player] then
 		move_sync_connections[player]:Disconnect()
@@ -1437,14 +1404,6 @@ local function Start_Move_Sync(player, humanoid, tracks, walk_phase_multiplier, 
 		local phase = Get_Blended_Movement_Phase(player, humanoid, walk_phase_multiplier, run_phase_multiplier)
 		if phase and tracks.Move.Length > 0 then
 			tracks.Move.TimePosition = phase * tracks.Move.Length
-		end
-		-- [debug] see comment above local last_sync_debug -- remove once root-caused.
-		if os.clock() - (last_sync_debug[player] or 0) >= 0.5 then
-			last_sync_debug[player] = os.clock()
-			print(string.format(
-				"[PlayerCombat DEBUG] %s Move sync -- WalkSpeed: %.2f, is_sprinting: %s, phase: %s, Move.Speed: %.2f, Move.TimePosition: %.3f / %.3f",
-				player.Name, humanoid.WalkSpeed, tostring(PlayerSprint.is_sprinting(player)), phase and string.format("%.3f", phase) or "nil", tracks.Move.Speed, tracks.Move.TimePosition, tracks.Move.Length
-				))
 		end
 	end)
 end

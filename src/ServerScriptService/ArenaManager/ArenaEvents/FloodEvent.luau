@@ -217,24 +217,14 @@ local function Rise_Water_Over_Time(map_radius, start_level, target_level)
 	local step_height = total_rise / steps
 	local current_level = start_level
 	workspace:SetAttribute("WaterLevel", current_level)
-	-- [debug] one-time, not per-tick -- confirms the rise is actually
-	-- starting and what it's aiming for, since the water itself is easy to
-	-- miss/hard to judge visually from a distance while it's still low.
-	print(string.format("[FloodEvent DEBUG] water rise starting -- %.1f -> %.1f over %d steps (~%ds apart)", start_level, target_level, steps, STORM_RISE_STEP_INTERVAL))
 	for step = 1, steps do
 		local next_level = (step == steps) and target_level or (current_level + step_height)
 		Flood_Fill_Slab(map_radius, current_level, next_level)
 		current_level = next_level
 		workspace:SetAttribute("WaterLevel", current_level)
-		-- [debug] one print per STEP (every STORM_RISE_STEP_INTERVAL
-		-- seconds, ~40 total over the default 80s rise), not per-tick --
-		-- enough to watch progress in Output without flooding it the way
-		-- a per-Heartbeat print would.
-		print(string.format("[FloodEvent DEBUG] water rise step %d/%d -- level now %.1f", step, steps, current_level))
 		task.wait(STORM_RISE_STEP_INTERVAL)
 	end
 	workspace:SetAttribute("FloodHasOccurred", true)
-	print(string.format("[FloodEvent DEBUG] water rise complete -- holding at %.1f for the rest of the match", target_level))
 end
 -- One player's temporary storm effects -- a rain emitter following
 -- overhead, and a VectorForce on their HumanoidRootPart for the wind to
@@ -421,12 +411,6 @@ local function Start_Storm(duration)
 			end
 		end)
 	end)
-	-- [debug] one-time -- confirms the storm actually started and how many
-	-- players got wind/rain set up, since a silent failure here (e.g. a
-	-- missing HumanoidRootPart on every character) would otherwise only
-	-- show up as "the storm looks weirdly quiet," hard to tell apart from
-	-- it just not having started at all.
-	print(string.format("[FloodEvent DEBUG] storm starting -- %d players outfitted with wind/rain, lasting %ds", #Players:GetPlayers(), duration))
 	task.spawn(Run_Lightning_Loop, thunder_sound)
 	task.spawn(function()
 		while storm_active do
@@ -458,7 +442,6 @@ local function Start_Storm(duration)
 			Teardown_Storm_Player(player)
 		end
 		storm_character_connections = {}
-		print("[FloodEvent DEBUG] storm ended -- atmosphere/wind reverted (water level is NOT reverted, see Rise_Water_Over_Time)")
 	end)
 end
 -- [stated] "I now want to add a new event, the flood. This should be a map
@@ -482,18 +465,11 @@ local function Run_Flood_Sequence()
 		return
 	end
 	local target_level = average_height + FLOOD_LEVEL_ABOVE_AVERAGE
-	-- [debug] one-time -- the single most useful print in this whole file
-	-- for verifying the math itself: lets you sanity-check the sampled
-	-- average/lowest point and the resulting target against what the map
-	-- actually looks like, before waiting out the whole rise to find out
-	-- visually whether it landed somewhere sane.
-	print(string.format("[FloodEvent DEBUG] sampled terrain -- average height: %.1f, lowest point: %.1f, map radius: %d -- target water level: %.1f (average - %d)", average_height, min_height, map_radius, target_level, FLOOD_LEVEL_ABOVE_AVERAGE))
 	task.wait(STORM_RISE_START_DELAY)
 	Rise_Water_Over_Time(map_radius, min_height, target_level)
 end
 function FloodEvent.trigger(game_data)
 	if has_flooded then
-		print("[FloodEvent DEBUG] trigger() called again, but the flood already happened this match -- ignoring")
 		return
 	end
 	has_flooded = true
