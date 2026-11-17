@@ -18,6 +18,7 @@ local PlayerStats = require(server_script:WaitForChild("PlayerStats"))
 -- Real sprint state, used to pick the walk vs. run phase multiplier in
 -- Get_Blended_Movement_Phase.
 local PlayerSprint = require(server_script:WaitForChild("PlayerSprint"))
+local MatchFreeze = require(server_script:WaitForChild("MatchFreeze"))
 local PlayerCombat = {}
 PlayerCombat.blocking_players = {}
 PlayerCombat.invulnerable_until = {}
@@ -893,6 +894,10 @@ function PlayerCombat.refresh_weapon_animations(player)
 end
 function PlayerCombat.is_invulnerable(player)
 	if PlayerCombat.dev_invulnerable[player] then
+		return true
+	end
+	-- No damage while frozen for an event cutscene.
+	if MatchFreeze.is_protected(player) then
 		return true
 	end
 	local until_time = PlayerCombat.invulnerable_until[player]

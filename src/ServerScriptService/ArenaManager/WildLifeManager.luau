@@ -7,6 +7,8 @@ local arena_manager = ServerScriptService:WaitForChild("ArenaManager")
 local PlayerInventory = require(ServerScriptService:WaitForChild("PlayerInventory"))
 local PlayerCombat = require(ServerScriptService:WaitForChild("PlayerCombat"))
 local PlayerInfection = require(arena_manager:WaitForChild("PlayerInfection"))
+local MatchFreeze = require(ServerScriptService:WaitForChild("MatchFreeze"))
+local last_pause_debug = 0 -- [FreezeDebug] throttle, temporary
 local inventory_updated = ReplicatedStorage:WaitForChild("InventoryUpdated")
 local WildlifeManager = {}
 local COMBAT_TARGET_TAG = "CombatTarget"
@@ -545,6 +547,18 @@ local function Run_Animal_AI(entry)
 				measured_speed = Vector3.new(delta.X, 0, delta.Z).Magnitude / elapsed
 			end
 			local ok, err = pcall(function()
+				-- Event cutscene: hold still, and restart the attack cooldown so
+				-- nothing hits the instant the cutscene ends.
+				if MatchFreeze.mobs_paused() then
+					Stop_Animal(root)
+					entry.ai_state.last_attack_time = os.clock()
+					Update_Movement_Animation(entry, 0)
+					if os.clock() - last_pause_debug >= 1 then -- temporary, remove once confirmed
+						last_pause_debug = os.clock()
+						print("[FreezeDebug] wildlife AI paused for cutscene")
+					end
+					return
+				end
 				if entry.frenzied then
 					local player_in_aggro = Threat_Or_Wander(model, root, entry.stats, entry.ai_state, entry.infected, entry.attack_track)
 					if player_in_aggro then

@@ -32,6 +32,7 @@ local DroppedItems = require(script.Parent.DroppedItems)
 local PlayerHunger = require(script.Parent.PlayerHunger)
 -- Shared sprint state (PlayerCombat's animation sync reads it too).
 local PlayerSprint = require(script.Parent.PlayerSprint)
+local MatchFreeze = require(script.Parent.MatchFreeze)
 -- PlayerInfection lives inside the ArenaManager folder.
 local PlayerInfection = require(script.Parent.ArenaManager.PlayerInfection)
 local ItemData = require(ReplicatedStorage:WaitForChild("ItemData"))
@@ -44,6 +45,7 @@ local player_stamina = require(script.Parent.PlayerStamina)
 -- Walk and sprint speed variables
 local walk_speed = 16
 local sprint_speed = 28
+local DEV_WALK_SPEED = 50
 -- Base sprint drain, scaled per weight tier. Placeholder.
 local BASE_SPRINT_STAMINA_DRAIN = 8
 -- Dexterity -> sprint speed only. Placeholder.
@@ -80,6 +82,14 @@ local function Sync_Movement(player, dt)
 	if not humanoid then
 		return
 	end
+	-- Countdown/cutscene freeze: no movement, no sprint or swim drain.
+	if MatchFreeze.is_frozen(player) then
+		MatchFreeze.apply(player, humanoid, root)
+		PlayerSprint.set_sprinting(player, false)
+		PlayerHunger.set_active(player, "Sprint", false)
+		PlayerHunger.set_active(player, "Swim", false)
+		return
+	end
 	local effects = PlayerWeight.get_tier_effects(player)
 	local dexterity_sprint_multiplier = 1 + (PlayerStats.get(player, "Dexterity") - 1) * DEXTERITY_SPRINT_SPEED_PER_POINT
 	-- An equipped bag makes sprinting cost more stamina.
@@ -104,6 +114,10 @@ local function Sync_Movement(player, dt)
 	else
 		humanoid.WalkSpeed = walk_speed * effects.WalkSpeedMultiplier * infection_walk_multiplier
 	end
+	-- /dev mode speed (set by ArenaManager's /dev command).
+	if player:GetAttribute("DevMode") then
+		humanoid.WalkSpeed = DEV_WALK_SPEED
+	end
 	local is_swimming = humanoid:GetState() == Enum.HumanoidStateType.Swimming
 	-- Sprinting and swimming speed up hunger.
 	PlayerHunger.set_active(player, "Sprint", is_sprinting_and_moving)
@@ -121,7 +135,7 @@ local function Sync_Movement(player, dt)
 				root.AssemblyLinearVelocity = Vector3.new(current_velocity.X, 0, current_velocity.Z)
 			end
 		end
-		if not swim_drain_ok and humanoid.Health > 0 then
+		if not swim_drain_ok and humanoid.Health > 0 and not player_combat.is_invulnerable(player) then
 			humanoid:TakeDamage(DROWN_DAMAGE_PER_SECOND * dt)
 		end
 	end
@@ -136,6 +150,9 @@ local function Sync_Hunger_Health(player, dt)
 	end
 	local effects = PlayerHunger.get_stage_effects(player)
 	local delta = (effects.HealthRegenPerSecond - effects.HealthDamagePerSecond) * dt
+	if delta < 0 and player_combat.is_invulnerable(player) then
+		return
+	end
 	if delta ~= 0 then
 		humanoid.Health = math.clamp(humanoid.Health + delta, 0, humanoid.MaxHealth)
 	end
@@ -148,7 +165,7 @@ local function Sync_Infection_Health(player, dt)
 		return
 	end
 	local effects = PlayerInfection.get_stage_effects(player)
-	if effects.HealthDamagePerSecond > 0 then
+	if effects.HealthDamagePerSecond > 0 and not player_combat.is_invulnerable(player) then
 		humanoid:TakeDamage(effects.HealthDamagePerSecond * dt)
 	end
 end
@@ -167,7 +184,7 @@ sprint_request.OnServerEvent:Connect(function(player, wantsToSprint)
 		return
 	end
 	-- Checking player health above 0 and that players not in countdown
-	if humanoid.Health <= 0 or game_data.state == "countdown" then
+	if humanoid.Health <= 0 or MatchFreeze.is_frozen(player) then
 		return
 	end
 	-- Only records intent; Sync_Movement applies the speed.
@@ -273,6 +290,10 @@ local function Consume_Food_Item(player, item_name, data)
 end
 -- The next several functions are all combat based requests
 attack_request.OnServerEvent:Connect(function(player)
+	if MatchFreeze.is_frozen(player) then
+		print(("[FreezeDebug] %s: attack ignored while frozen"):format(player.Name)) -- temporary, remove once confirmed
+		return
+	end
 	-- Holding food in the Weapon slot: left-click eats instead of swinging.
 	local equipped = PlayerEquipment.player_equipment[player]
 	local weapon_entry = equipped and equipped["Weapon"]
@@ -289,18 +310,27 @@ attack_request.OnServerEvent:Connect(function(player)
 	end
 end)
 block_start_request.OnServerEvent:Connect(function(player)
+	if MatchFreeze.is_frozen(player) then
+		return
+	end
 	player_combat.start_block(player)
 end)
 block_stop_request.OnServerEvent:Connect(function(player)
 	player_combat.stop_block(player)
 end)
 dodge_request.OnServerEvent:Connect(function(player)
+	if MatchFreeze.is_frozen(player) then
+		return
+	end
 	local success, result = player_combat.dodge(player)
 	if not success then
 		warn("Dodge failed for", player.Name, ":", result)
 	end
 end)
 draw_start_request.OnServerEvent:Connect(function(player)
+	if MatchFreeze.is_frozen(player) then
+		return
+	end
 	local success, result = player_combat.start_draw(player)
 	if not success then
 		warn("Bow draw failed to start for", player.Name, ":", result)
@@ -413,7 +443,10 @@ run_service.Heartbeat:Connect(function(dt)
 		Sync_Movement(player, dt)
 		PlayerHunger.hunger_tick(player, dt)
 		Sync_Hunger_Health(player, dt)
-		PlayerInfection.infection_tick(player, dt)
+		-- Infection is paused during freezes (its stumble would move frozen players).
+		if not MatchFreeze.is_frozen(player) then
+			PlayerInfection.infection_tick(player, dt)
+		end
 		Sync_Infection_Health(player, dt)
 	end
 end)

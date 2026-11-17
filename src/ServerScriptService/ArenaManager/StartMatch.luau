@@ -17,6 +17,7 @@ local settlement_data = require(arena_manager:WaitForChild("SettlementData"))
 local wildlife = require(arena_manager:WaitForChild("WildLifeManager"))
 local day_night_weather = require(arena_manager:WaitForChild("DayNightWeather"))
 local dropped_items = require(server_script_service:WaitForChild("DroppedItems"))
+local match_freeze = require(server_script_service:WaitForChild("MatchFreeze"))
 local player_inventory = require(server_script_service:WaitForChild("PlayerInventory"))
 local player_weight = require(server_script_service:WaitForChild("PlayerWeight"))
 local floor_loot_data = require(arena_manager:WaitForChild("FloorLootData"))
@@ -1679,38 +1680,14 @@ function StartMatch.Generate(game_data)
 	-- Handed to ForestFireEvent through game_data.
 	game_data.forest_fire_origin_trees = FOREST_FIRE.origin_trees
 end
-local function Countdown_Player_Movement(player, enabled)
-	local walk_speed = 16
-	local jump_height = 7.2
-	local character = player.Character
-	local humanoid = character:FindFirstChild("Humanoid")
-	if not character then
-		return
-	end
-	if not humanoid then
-		return
-	end
-	if enabled then
-		humanoid.WalkSpeed = walk_speed
-		humanoid.JumpHeight = jump_height
-	else
-		humanoid.WalkSpeed = 0
-		humanoid.JumpHeight = 0
-	end
-end
+-- Countdown: participants can't move, jump or fight for 10 seconds.
 function StartMatch.Start_Match(game_data)
 	game_data.spectators = {}
-	for player in pairs(game_data.participants) do
-		if player.Character then
-			Countdown_Player_Movement(player, false)
-		end
-	end
+	local freeze_token = match_freeze.freeze(game_data.participants, "countdown")
 	match_ui_event:FireAllClients("Start Match", 10)
 	task.wait(10)
 	match_ui_event:FireAllClients("Match Started")
-	for player in pairs(game_data.participants) do
-		Countdown_Player_Movement(player, true)
-	end
+	match_freeze.release(freeze_token)
 	match_start:FireAllClients()
 	print("Match started")
 end

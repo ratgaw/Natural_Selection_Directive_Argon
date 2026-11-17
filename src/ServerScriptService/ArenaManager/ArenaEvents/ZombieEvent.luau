@@ -7,6 +7,8 @@ local PlayerEquipment = require(ServerScriptService:WaitForChild("PlayerEquipmen
 local PlayerCombat = require(ServerScriptService:WaitForChild("PlayerCombat"))
 local EliminatedAppearances = require(ServerScriptService:WaitForChild("ArenaManager"):WaitForChild("EliminatedAppearances"))
 local SettlementData = require(ServerScriptService:WaitForChild("ArenaManager"):WaitForChild("SettlementData"))
+local MatchFreeze = require(ServerScriptService:WaitForChild("MatchFreeze"))
+local last_pause_debug = 0 -- [FreezeDebug] throttle, temporary
 local ZombieEvent = {}
 local match_start_time = nil
 local BASE_ZOMBIE_COUNT = 10
@@ -221,6 +223,18 @@ function ZombieEvent.Run_Zombie_AI(zombie, humanoid, game_data, attack_track)
 	task.spawn(function()
 		while zombie.Parent and humanoid.Health > 0 do
 			local ok, err = pcall(function()
+				-- Event cutscene: stand still, and restart the attack cooldown so
+				-- nothing hits the instant the cutscene ends.
+				if MatchFreeze.mobs_paused() then
+					humanoid:Move(Vector3.new(0, 0, 0), false)
+					current_waypoints = nil
+					last_attack_time = os.clock()
+					if os.clock() - last_pause_debug >= 1 then -- temporary, remove once confirmed
+						last_pause_debug = os.clock()
+						print("[FreezeDebug] zombie AI paused for cutscene")
+					end
+					return
+				end
 				local closest_player, closest_distance = nil, math.huge
 				for player in pairs(game_data.participants) do
 					local character = player.Character

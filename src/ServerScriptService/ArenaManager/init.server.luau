@@ -46,36 +46,14 @@ arena_event_scheduler.register_event("Flood", flood_event.trigger)
 -- legacy Player.Chatted signal; switch to TextChatService if that stops firing.
 -- /dev toggles invincibility, extra speed, flight and no hunger.
 local dev_mode_players = {} -- [player] = true while /dev is active
-local DEV_WALK_SPEED = 50
-local NORMAL_WALK_SPEED = 16
 local function Set_Dev_Mode(player, enabled)
 	dev_mode_players[player] = enabled or nil
+	-- RequestChecker's Sync_Movement reads this attribute for the dev walk speed.
+	player:SetAttribute("DevMode", enabled or nil)
 	player_combat.set_dev_invulnerable(player, enabled)
 	player_hunger.set_immune(player, enabled)
 	dev_fly_toggled:FireClient(player, enabled)
-	if not enabled then
-		local character = player.Character
-		local humanoid = character and character:FindFirstChild("Humanoid")
-		if humanoid then
-			humanoid.WalkSpeed = NORMAL_WALK_SPEED
-		end
-	end
 end
--- Re-applies the dev walk speed every 0.5 s since other code also sets
--- WalkSpeed. (RequestChecker's Sync_Movement overrides it every frame, so this
--- currently loses.)
-task.spawn(function()
-	while true do
-		for player in pairs(dev_mode_players) do
-			local character = player.Character
-			local humanoid = character and character:FindFirstChild("Humanoid")
-			if humanoid and humanoid.WalkSpeed ~= DEV_WALK_SPEED then
-				humanoid.WalkSpeed = DEV_WALK_SPEED
-			end
-		end
-		task.wait(0.5)
-	end
-end)
 local DEBUG_COMMANDS = {
 	forestfire = function(player)
 		local found = arena_event_scheduler.force_trigger("Forest Fire", game_data)

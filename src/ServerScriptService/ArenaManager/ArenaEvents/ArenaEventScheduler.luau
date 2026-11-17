@@ -2,6 +2,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local ArenaManager = game:GetService("ServerScriptService"):WaitForChild("ArenaManager")
 local PlayerMinimap = require(ArenaManager:WaitForChild("PlayerMinimap"))
+local MatchFreeze = require(game:GetService("ServerScriptService"):WaitForChild("MatchFreeze"))
 
 local PAN_DURATION = 5 -- seconds — shared with clients via the announce event
 local event_announce = ReplicatedStorage:WaitForChild("EventAnnounce")
@@ -61,19 +62,6 @@ local function Send_Warnings(event_name, delay_seconds)
 	end
 end
 
--- Sets or clears movement freeze for every participant, used to hold
--- players still during the cinematic pan.
-local function Freeze_Players(game_data, frozen)
-	for player in pairs(game_data.participants) do
-		local character = player.Character
-		local humanoid = character and character:FindFirstChild("Humanoid")
-		if humanoid then
-			humanoid.WalkSpeed = frozen and 0 or 16
-			humanoid.JumpHeight = frozen and 0 or 7.2
-		end
-	end
-end
-
 -- Warnings, freeze, camera pan, then the event's run function. Shared by the
 -- scheduler loop and force_trigger.
 local function Run_Event(chosen, game_data)
@@ -88,10 +76,10 @@ local function Run_Event(chosen, game_data)
 		return
 	end
 
-	-- Freeze players and play the cinematic pan on every client while the
-	-- event's own setup work runs concurrently.
+	-- Cutscene freeze for the camera pan: participants can't move or take damage,
+	-- and mobs hold still. The event's own setup runs during the pan.
 	event_announce:FireAllClients(chosen.name, PAN_DURATION)
-	Freeze_Players(game_data, true)
+	local freeze_token = MatchFreeze.freeze(game_data.participants, "cutscene")
 
 	task.spawn(function()
 		local ok, err = pcall(chosen.run, game_data)
@@ -101,7 +89,7 @@ local function Run_Event(chosen, game_data)
 	end)
 
 	task.wait(PAN_DURATION)
-	Freeze_Players(game_data, false)
+	MatchFreeze.release(freeze_token)
 end
 
 function ArenaEventScheduler.start(game_data)
