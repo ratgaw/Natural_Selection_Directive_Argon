@@ -2,7 +2,6 @@
   "name": "Natural_Selection_Directive_Argon",
   "tree": {
     "$className": "DataModel",
-
     "ServerScriptService": {
       "$path": "src/ServerScriptService"
     },
@@ -16,9 +15,6 @@
       "StarterCharacterScripts": {
         "$path": "src/StarterPlayer/StarterCharacterScripts"
       }
-    },
-    "StarterGui": {
-      "$path": "src/StarterGui"
     }
   }
 }
